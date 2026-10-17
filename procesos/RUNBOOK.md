@@ -1,13 +1,13 @@
 GUIA DE EJECUCION Y PRUEBA - CANAL 11
 
 1) Requisitos
-- PHP 8.3+, Composer, PostgreSQL, acceso al servidor de correo del curso.
+- Java 17, Maven en PATH, PostgreSQL, acceso al servidor de correo del curso.
 
 2) Crear tablas y admin semilla (una vez)
-  php artisan migrate --seed
+  mvn -q -DskipTests compile exec:java "-Dexec.mainClass=canal11.App"
 
 3) Ejecutar el daemon de correo
-  php artisan mail:daemon
+  mvn -q -DskipTests compile exec:java "-Dexec.mainClass=canal11.mail.MailDaemon"
 - Lee por POP3 el buzon del grupo, procesa el Subject como comando, ejecuta en la BD, responde por SMTP y elimina el mensaje. Repite cada 10 s.
 
 4) Como enviar comandos
@@ -15,7 +15,7 @@ GUIA DE EJECUCION Y PRUEBA - CANAL 11
 - Formato: COMANDO["param1","param2",...]. Comillas para textos con espacios; numeros sin comillas.
 - Fechas YYYY-MM-DD, horas HH:MM[:SS].
 - Todos los roles se autentican antes con AUTH["password"] (30 min).
-- Credenciales de buzon y admin semilla: en .env / seeder (no se documentan aqui).
+- Credenciales de buzon y admin semilla: en variables de entorno / config.properties local (no se documentan aqui).
 
 Ejemplos (Subject)
   AUTH["password"]

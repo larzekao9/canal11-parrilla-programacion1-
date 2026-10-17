@@ -25,13 +25,13 @@ con consultas (LISAUD/GETAUD) y conciliacion.
 --------------------------------------------------------------------
 FASE 1 - BASE DEL SISTEMA (plan-cu0)
 Tareas
-- [ ] composer create-project laravel/laravel; configurar pgsql en .env; crear BD canal11.
-- [ ] Migraciones de TODAS las tablas (modelo en guia-actualizacion-y-handoff.md) + migrate.
-- [ ] UserSeeder con administrador semilla.
+- [ ] Proyecto Maven (Java 17, paquete canal11) con driver PostgreSQL y jbcrypt; crear BD canal11; DbConfig/MailConfig.
+- [ ] SchemaInitializer con TODAS las tablas (modelo en guia-actualizacion-y-handoff.md); ejecutar App.java.
+- [ ] ensureAdminSeed() con administrador semilla.
 - [ ] SubjectParser (+ tests), InputValidator.
-- [ ] Pop3Client, SmtpClient (config/mailcommands.php + .env).
+- [ ] Pop3Client, SmtpClient (MailConfig con credenciales fuera del repo).
 - [ ] CommandRouter con roles, sesion AUTH 30 min (tabla auth_sessions) y HELP.
-- [ ] php artisan mail:daemon (bucle 10 s, manejo de errores por correo).
+- [ ] MailDaemon (bucle 10 s, manejo de errores por correo).
 - [ ] AuditoriaService minimo (insertar log).
 Verificacion
 - Enviar HELP[] desde el admin => responde lista de comandos. Remitente desconocido => error. Comando sin AUTH => pide AUTH.
@@ -49,7 +49,7 @@ Listo cuando: los 3 roles existen y el router bloquea comandos segun rol.
 FASE 3 - CATALOGO DE PROGRAMAS (plan-cu2)
 Tareas
 - [ ] Programa Repository/Service; INSPRG, LISPRG, GETPRG, UPDPRG, DELPRG.
-- [ ] Seeder: Noticiero, Revista, 2 peliculas, 1 documental.
+- [ ] Seed: Noticiero, Revista, 2 peliculas, 1 documental.
 Verificacion
 - CRUD completo, filtro por tipo, desactivar programa sin uso.
 Listo cuando: hay catalogo consultable por correo.
@@ -65,7 +65,7 @@ Listo cuando: no se pueden registrar archivos repetidos.
 FASE 5 - PARRILLA DE PROGRAMACION (plan-cu3)  [fase mas grande]
 Subfases
 - 5a: INSPAR, GETPAR, LISPAR, DELPAR (parrilla vacia por fecha).
-- 5b: INSBLO, UPDBLO, DELBLO con chequeo de solapamiento (transaccion + lockForUpdate).
+- 5b: INSBLO, UPDBLO, DELBLO con chequeo de solapamiento (transaccion JDBC + SELECT ... FOR UPDATE).
 - 5c: VALPAR (huecos/solapes/sin material) y DUPPAR (copiar dia).
 - 5d: PUBPAR / CERPAR, version +1 en cambios de parrilla publicada, auditoria antes/despues.
 Verificacion
@@ -108,11 +108,11 @@ Verificacion
 Listo cuando: los reportes por fecha y cliente (RF-28) responden correctamente.
 
 FASE 10 - CIERRE Y ENTREGA
-- [ ] Seeders de demo (usuarios, programas, una semana de parrilla, 2-3 anunciantes).
+- [ ] Datos de demo (seed) (usuarios, programas, una semana de parrilla, 2-3 anunciantes).
 - [ ] Ejecutar el flujo end-to-end del RUNBOOK por correo real.
 - [ ] Completar HELP por rol y RUNBOOK con todos los comandos.
 - [ ] Revisar permisos por rol, errores consistentes y que el daemon sobreviva a correos malformados.
-- [ ] Credenciales solo en .env; README con puesta en marcha.
+- [ ] Credenciales solo en variables de entorno / config.properties local; README con puesta en marcha.
 
 COMO USAR EL PLAN CON UN CHAT NUEVO
 - Pasar guia-actualizacion-y-handoff.md + este archivo + el plan-cuN de la fase en curso, e indicar "estamos en la Fase N".

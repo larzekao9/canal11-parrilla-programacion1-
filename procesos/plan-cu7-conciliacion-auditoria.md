@@ -35,7 +35,7 @@ SALIDAS ESPERADAS
 - Auditoria: lista cronologica quien/cuando/que cambio.
 
 CAMBIOS A APLICAR EN CODIGO
-1) Migraciones emisiones_reales y auditoria_logs.
+1) Tablas emisiones_reales y auditoria_logs en SchemaInitializer.
 2) AuditoriaService (usado por todos los Service; implementar primero, antes del resto de CU si es posible).
 3) ConciliacionService (calculo de desviacion y cumplimiento).
 4) CommandRouter: INSEMI/UPDEMI/CONPAR para ADMIN y PROGRAMADOR; LISAUD/GETAUD solo ADMIN; HELP.

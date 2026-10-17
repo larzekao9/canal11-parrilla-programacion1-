@@ -18,7 +18,7 @@ REGLAS DE NEGOCIO
 - hora_fin por defecto = hora_inicio + duracion_min del programa.
 - PUBPAR exige: sin solapamientos y bloques de tipo programa con material VALIDADO (CU5).
 - Parrilla PUBLICADA: se puede modificar, pero cada cambio incrementa version y se audita. CERRADA: solo lectura.
-- Modificaciones dentro de transaccion (lockForUpdate) para evitar ediciones concurrentes.
+- Modificaciones dentro de una transaccion (JDBC con SELECT ... FOR UPDATE) para evitar ediciones concurrentes.
 - Programa inactivo no se puede agregar.
 
 ENTRADAS ESPERADAS
@@ -36,7 +36,7 @@ SALIDAS ESPERADAS
 - Parrilla en texto (hora - hora | programa | material | estado), reporte de validacion, confirmaciones de publicacion/cierre.
 
 CAMBIOS A APLICAR EN CODIGO
-1) Migraciones parrillas y parrilla_bloques (indice por parrilla_id, hora_inicio).
+1) Tablas parrillas y parrilla_bloques en SchemaInitializer (indice por parrilla_id, hora_inicio).
 2) ParrillaRepository y ParrillaService (crear, agregar bloque con chequeo de solape, validar, publicar, cerrar, duplicar).
 3) CommandRouter: comandos a ADMIN y PROGRAMADOR; LIS/GET/VAL a ENCARGADO; actualizar HELP.
 4) Auditoria con snapshot antes/despues en jsonb.

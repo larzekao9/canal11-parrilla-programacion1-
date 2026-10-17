@@ -34,7 +34,7 @@ SALIDAS ESPERADAS
 - "OK: spot insertado en pausa HH:MM"; PAUPAR en texto agrupado por bloque con cliente y segundos usados/disponibles.
 
 CAMBIOS A APLICAR EN CODIGO
-1) Migraciones clientes, pautas, pauta_spots.
+1) Tablas clientes, pautas, pauta_spots en SchemaInitializer.
 2) ClienteService, PautaService (validar vigencia, capacidad de pausa, pases), repositories.
 3) CommandRouter: comandos a ADMIN y PROGRAMADOR; LIS/GET/PAUPAR a ENCARGADO; HELP.
 4) Auditoria de altas, cambios y quitas de spots.

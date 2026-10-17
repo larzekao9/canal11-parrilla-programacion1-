@@ -6,7 +6,7 @@ OBJETIVO
 
 CONTEXTO CLAVE (RESUMEN)
 - Sistema de gestion de parrilla de programacion de Canal 11 (Santa Cruz, Bolivia). Fuente: Canal11_Levantamiento_Informacion.md.
-- Sin frontend. Backend en Laravel 12 (PHP 8.3+) + PostgreSQL.
+- Sin frontend. Backend en Java 17 + Maven + JDBC + PostgreSQL (igual que servicargo).
 - Interfaz = correo electronico: un daemon lee por POP3 el buzon del grupo, interpreta el Subject como comando
   COMANDO["param1","param2",...], ejecuta contra la BD y responde por SMTP al remitente. El Body se ignora.
 - Roles (users.rol, texto): administrador, programador, encargado (Encargado de Contenidos).
@@ -14,21 +14,14 @@ CONTEXTO CLAVE (RESUMEN)
 - Problemas del canal que el sistema ataca: archivos duplicados (hash en CU4), doble fuente de verdad del orden (parrilla unica versionada, CU3),
   falta de trazabilidad (auditoria, CU7 / RF-29), reportes (RF-28, CU8).
 
-EQUIVALENCIA CON EL PROYECTO DE REFERENCIA (JAVA -> LARAVEL)
-| Java (servicargo)            | Laravel (canal11)                                  |
-|------------------------------|----------------------------------------------------|
-| MailDaemon                   | php artisan mail:daemon (bucle, sleep 10 s)         |
-| Pop3Client / SmtpClient      | App\Mail\Pop3Client / App\Mail\SmtpClient (sockets) |
-| SubjectParser                | App\Mail\SubjectParser                              |
-| CommandRouter (roles, AUTH)  | App\Mail\CommandRouter                              |
-| *Service                     | App\Services\*Service (validan + orquestan)         |
-| *Repository (JDBC)           | App\Repositories\* o modelos Eloquent               |
-| InputValidator               | App\Support\InputValidator                          |
-| SchemaInitializer + seed     | database/migrations + DatabaseSeeder (admin semilla)|
-| MailConfig                   | config/mailcommands.php + .env                      |
+ARQUITECTURA (IGUAL A SERVICARGO)
+- Correo (Subject) -> MailDaemon -> CommandRouter (roles, AUTH) -> Service (validaciones y reglas) -> Repository (JDBC) -> PostgreSQL
+  -> respuesta en texto -> SmtpClient.
+- Paquetes: canal11.{db, mail, model, gestion, programacion, comercial, emision, reporte, util}. Detalle en plan-cu0-base-correo.md.
+- Esquema y seed: SchemaInitializer (se ejecuta con App.java). Configuracion: DbConfig / MailConfig (variables de entorno o config.properties local).
 
 ORDEN RECOMENDADO DE IMPLEMENTACION
-0) Base: migraciones, daemon de correo, parser, router, AUTH, HELP  -> plan-cu0-base-correo.md
+0) Base: esquema BD, daemon de correo, parser, router, AUTH, HELP  -> plan-cu0-base-correo.md
 1) CU1 Usuarios                                                      -> plan-cu1-gestion-usuarios.md
 2) CU2 Catalogo de Programas                                         -> plan-cu2-catalogo-programas.md
 3) CU4 Materiales de video                                           -> plan-cu4-materiales-video.md
@@ -63,4 +56,4 @@ PARA CONTINUAR EN OTRO CHAT
 - Enviar este archivo y los planes por CU.
 - Indicar que el sistema es por correo (Subject = comando) y NO una API REST.
 - Orden: base -> CU1 -> CU2 -> CU4 -> CU3 -> CU5 -> CU6 -> CU7 -> CU8.
-- Las credenciales del buzon/VPS van en .env (no en el repositorio).
+- Las credenciales del buzon/VPS van en variables de entorno o config.properties local (no en el repositorio).

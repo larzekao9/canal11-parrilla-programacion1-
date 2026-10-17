@@ -8,7 +8,7 @@ ALCANCE
 - Tabla: users.
 
 DATOS Y CAMPOS
-- users: ci, nombre, apellido, rol (administrador | programador | encargado), telefono, email (unico), password (hash bcrypt), activo.
+- users: ci, nombre, apellido, rol (administrador | programador | encargado), telefono, email (unico), password (hash con jbcrypt), activo.
 
 REGLAS DE NEGOCIO
 - Solo administrador gestiona usuarios.
@@ -29,8 +29,8 @@ SALIDAS ESPERADAS
 - "OK: usuario creado con ID n", listados tabulados, confirmaciones de actualizacion/desactivacion, errores claros por validacion.
 
 CAMBIOS A APLICAR EN CODIGO
-1) Migracion users + UserSeeder (admin semilla).
-2) UsuarioRepository (Eloquent): crear, buscar por id/email, listar con filtro de rol, actualizar campos permitidos.
+1) Tabla users en SchemaInitializer + ensureAdminSeed() (admin semilla).
+2) UsuarioRepository (JDBC, PreparedStatement): crear, buscar por id/email, listar con filtro de rol, actualizar campos permitidos.
 3) UsuarioService: validar con InputValidator, hash de password, reglas de ultimo admin.
 4) CommandRouter: registrar comandos CU1 en el set ADMIN; AUTH para todos los roles; HELP por rol.
 5) Auditoria: registrar INSUSU/UPDUSU/DELUSU (servicio de CU7).

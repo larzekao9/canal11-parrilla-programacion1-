@@ -28,7 +28,7 @@ SALIDAS ESPERADAS
 - "OK: programa creado con ID n", listado (id, nombre, tipo, duracion, activo), detalle por id, errores claros.
 
 CAMBIOS A APLICAR EN CODIGO
-1) Migracion programas + seeder de ejemplo (Noticiero, Revista, peliculas).
+1) Tabla programas en SchemaInitializer + datos de ejemplo (Noticiero, Revista, peliculas).
 2) ProgramaRepository / ProgramaService con InputValidator (validateEnum para tipo, validatePositive para duracion).
 3) CommandRouter: agregar comandos a ADMIN y PROGRAMADOR (solo LIS/GET para encargado) y actualizar HELP.
 4) Auditoria de INS/UPD/DEL.

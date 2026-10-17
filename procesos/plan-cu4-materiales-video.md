@@ -32,8 +32,8 @@ SALIDAS ESPERADAS
 - "OK: material registrado con ID n (estado PENDIENTE)"; en duplicado: "Error: material duplicado, ya registrado como ID n".
 
 CAMBIOS A APLICAR EN CODIGO
-1) Migracion materiales (unique en hash_sha256).
-2) MaterialRepository y MaterialService (hash con hash_file('sha256', ruta), verificacion de ruta y extension).
+1) Tabla materiales en SchemaInitializer (unique en hash_sha256).
+2) MaterialRepository y MaterialService (hash SHA-256 con MessageDigest sobre el archivo, verificacion de ruta y extension).
 3) CommandRouter: comandos a ADMIN y ENCARGADO; LIS/GET a PROGRAMADOR; HELP.
 4) Auditoria de INS/UPD/DEL.
 
