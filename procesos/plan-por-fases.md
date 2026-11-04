@@ -1,5 +1,8 @@
 PLAN DE IMPLEMENTACION POR FASES - CANAL 11
 
+ESTADO (nov 2026): fases 1 a 9 IMPLEMENTADAS (CU1-CU8) con tests de integracion contra PostgreSQL. Pendiente: fase 10 (pruebas con el
+servidor del curso, correo real y entrega: .tar.gz, documento con caratula y GitHub inf513-proyecto1).
+
 REGLAS DE TRABAJO
 - Cada fase termina en algo que se puede PROBAR enviando un correo real (o simulado) y queda funcionando antes de pasar a la siguiente.
 - Al cerrar cada fase: tests en verde, ejemplos agregados al RUNBOOK, commit/tag (fase-1, fase-2...).
