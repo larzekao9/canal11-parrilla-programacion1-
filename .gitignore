@@ -2,3 +2,18 @@
 .env
 vendor/
 node_modules/
+
+# Java / Maven
+target/
+*.class
+
+# Configuracion local con credenciales (NUNCA al repo)
+config.properties
+
+# Buzon simulado (correos de prueba)
+buzon-simulado/
+
+# IDE
+.idea/
+.vscode/
+*.iml

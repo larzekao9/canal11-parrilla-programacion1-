@@ -1,0 +1,14 @@
+# Copiar a config.properties (ignorado por git) y completar. Tambien se puede usar variables de entorno
+# con el mismo nombre en MAYUSCULAS y puntos como guion bajo (DB_PASSWORD, ADMIN_EMAIL, ...).
+# Las variables de entorno tienen prioridad.
+
+db.url=jdbc:postgresql://localhost:5432/canal_bd
+db.user=postgres
+db.password=CAMBIAR
+
+# Administrador semilla (se crea solo si no existe ningun administrador)
+admin.ci=00000000
+admin.nombre=Admin
+admin.apellido=Canal11
+admin.email=admin@canal11.com
+admin.password=CAMBIAR_MIN_8
