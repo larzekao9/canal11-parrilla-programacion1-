@@ -68,7 +68,9 @@ public class MailDaemon {
         if (modo.equalsIgnoreCase("real")) {
             System.out.println("[daemon] modo REAL: POP3 " + MailFactory.pop3Host() + ":" + MailFactory.pop3Port()
                     + ", SMTP " + MailFactory.smtpHost() + ":" + MailFactory.smtpPort());
-            new MailDaemon(MailFactory.pop3(), MailFactory.smtp(), router).run(interval);
+            // Solo se procesan correos con Subject COMANDO[...] enviados por usuarios registrados; el resto del buzon no se toca.
+            Pop3Client pop = MailFactory.pop3(m -> SubjectParser.esValido(m.subject()) && router.isKnownSender(m.from()));
+            new MailDaemon(pop, MailFactory.smtp(), router).run(interval);
         } else {
             System.out.println("[daemon] modo SIMULADO (carpeta de archivos). Para correo real: mail.modo=real");
             FileMailbox mailbox = new FileMailbox(Path.of(DbConfig.get("mail.simulado.dir", "buzon-simulado")));

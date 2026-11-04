@@ -40,45 +40,61 @@ class MailProtocolTest {
 
     static void send(Writer w, String s) throws IOException { w.write(s + "\r\n"); w.flush(); }
 
-    @Test
-    void pop3LeeMensajesYBorra() throws Exception {
-        String raw = "From: Ana <ana@c.com>\r\nSubject: HELP[]\r\n\r\ncuerpo\r\n..punto\r\n";
-        // dos conexiones: fetchAll y delete
-        try (FakeServer s1 = new FakeServer((in, out, log) -> {
+    /** Buzon falso con N mensajes: responde STAT, UIDL n, TOP n 0, DELE n y registra todo lo recibido. */
+    static Script buzon(String[] headers, List<Integer> borrados) {
+        return (in, out, log) -> {
             send(out, "+OK hola");
             String l;
             while ((l = in.readLine()) != null) {
                 log.add(l);
                 if (l.startsWith("USER") || l.startsWith("PASS")) send(out, "+OK");
-                else if (l.equals("UIDL")) { send(out, "+OK"); send(out, "1 uid-aaa"); send(out, "."); }
-                else if (l.startsWith("RETR")) { send(out, "+OK"); out.write(raw); send(out, "."); }
+                else if (l.equals("STAT")) send(out, "+OK " + headers.length + " 1000");
+                else if (l.startsWith("UIDL ")) { int n = Integer.parseInt(l.substring(5)); send(out, "+OK " + n + " uid-" + n); }
+                else if (l.startsWith("TOP ")) { int n = Integer.parseInt(l.split(" ")[1]); send(out, "+OK"); out.write(headers[n - 1]); send(out, "."); }
+                else if (l.startsWith("DELE ")) { borrados.add(Integer.parseInt(l.substring(5))); send(out, "+OK"); }
                 else if (l.equals("QUIT")) { send(out, "+OK bye"); break; }
             }
-        })) {
-            Pop3Client c = new Pop3Client("localhost", s1.port(), "grupo12sa", "x");
-            List<MailMessage> msgs = c.fetchAll();
-            assertEquals(1, msgs.size());
-            assertEquals("ana@c.com", msgs.get(0).from());
-            assertEquals("HELP[]", msgs.get(0).subject());
-            assertEquals("uid-aaa", msgs.get(0).id());
-            assertTrue(s1.received.contains("USER grupo12sa"));
+        };
+    }
+
+    static String mail(String from, String subject) {
+        return "From: " + from + "\r\nSubject: " + subject + "\r\n\r\n";
+    }
+
+    @Test
+    void pop3SoloExaminaLaVentanaRecienteYSoloDevuelveLoAceptado() throws Exception {
+        // 1000 mensajes simulados; solo los 3 ultimos entran en la ventana. Spam y no-comandos no se devuelven.
+        String[] msgs = new String[1000];
+        for (int i = 0; i < 1000; i++) msgs[i] = mail("spam@x.com", "Oferta " + i);
+        msgs[997] = mail("Ana <ana@c.com>", "HELP[]");                     // comando de usuario registrado
+        msgs[998] = mail("spam@x.com", "LISUSU[\"*\"]");                   // comando, pero remitente desconocido
+        msgs[999] = mail("ana@c.com", "hola, una pregunta");              // usuario registrado pero no es comando
+        msgs[10] = mail("ana@c.com", "HELP[]");                           // fuera de la ventana: no debe verse
+        List<Integer> borrados = new ArrayList<>();
+        try (FakeServer s = new FakeServer(buzon(msgs, borrados))) {
+            Pop3Client c = new Pop3Client("localhost", s.port(), "grupo12sa", "x", 3,
+                    m -> SubjectParser.esValido(m.subject()) && m.from().equals("ana@c.com"));
+            List<MailMessage> res = c.fetchAll();
+            assertEquals(1, res.size());
+            assertEquals("HELP[]", res.get(0).subject());
+            assertEquals("ana@c.com", res.get(0).from());
+            assertEquals("uid-998", res.get(0).id());
+            assertTrue(s.received.stream().noneMatch(x -> x.startsWith("RETR")), "no debe descargar mensajes completos");
+            assertTrue(s.received.stream().noneMatch(x -> x.startsWith("DELE")), "fetchAll no borra nada");
+            assertEquals(3, s.received.stream().filter(x -> x.startsWith("TOP")).count(), "solo 3 mensajes examinados");
         }
-        List<String> log2 = new ArrayList<>();
-        try (FakeServer s2 = new FakeServer((in, out, log) -> {
-            send(out, "+OK hola");
-            String l;
-            while ((l = in.readLine()) != null) {
-                log.add(l);
-                if (l.startsWith("USER") || l.startsWith("PASS") || l.startsWith("DELE")) send(out, "+OK");
-                else if (l.equals("UIDL")) { send(out, "+OK"); send(out, "1 otro"); send(out, "2 uid-aaa"); send(out, "."); }
-                else if (l.equals("QUIT")) { send(out, "+OK bye"); break; }
-            }
-        })) {
-            new Pop3Client("localhost", s2.port(), "u", "p").delete(new MailMessage("uid-aaa", "a", "b", ""));
-            s2.t.join(2000);
-            log2.addAll(s2.received);
+    }
+
+    @Test
+    void pop3BorraSoloElMensajeProcesado() throws Exception {
+        String[] msgs = new String[50];
+        for (int i = 0; i < 50; i++) msgs[i] = mail("spam@x.com", "Oferta " + i);
+        List<Integer> borrados = new ArrayList<>();
+        try (FakeServer s = new FakeServer(buzon(msgs, borrados))) {
+            new Pop3Client("localhost", s.port(), "u", "p", 10, m -> true).delete(new MailMessage("uid-48", "a", "b", ""));
+            s.t.join(2000);
         }
-        assertTrue(log2.contains("DELE 2"), "debe borrar el mensaje 2: " + log2);
+        assertEquals(List.of(48), borrados);
     }
 
     @Test

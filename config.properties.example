@@ -30,3 +30,7 @@ mail.from=grupo12sa@tecnoweb.org.bo
 # db.url=jdbc:postgresql://db.tecnoweb.org.bo:5432/db_grupo12sa
 # db.user=grupo12sa
 # db.password=CAMBIAR
+
+# Ventana de seguridad del buzon real: solo se examinan los ultimos N correos (el resto no se toca).
+mail.ventana=200
+# IMPORTANTE: admin.email debe ser el correo desde el que vas a ESCRIBIR los comandos (el sistema identifica al usuario por su email).

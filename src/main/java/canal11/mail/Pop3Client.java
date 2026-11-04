@@ -11,10 +11,14 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 
 /**
- * Lector POP3 (sin cifrado, puerto 110 del servidor del curso). Cada operacion abre su propia conexion:
- * fetchAll() lee todo sin borrar; delete() identifica el mensaje por UIDL y lo borra.
+ * Lector POP3 (sin cifrado, puerto 110 del servidor del curso). Cada operacion abre su propia conexion.
+ * SEGURIDAD: el buzon puede tener cientos de miles de correos ajenos (spam), asi que:
+ *  - solo examina los ultimos {@code ventana} mensajes (STAT + UIDL n + TOP n 0, sin descargar todo);
+ *  - solo devuelve los que cumplan {@code aceptar} (p. ej. subject con forma COMANDO[...] y remitente registrado);
+ *  - el resto NO se toca (ni se responde ni se borra); delete() solo borra lo que el sistema proceso.
  */
 public class Pop3Client implements MailReader {
 
@@ -24,12 +28,20 @@ public class Pop3Client implements MailReader {
     private final int port;
     private final String user;
     private final String password;
+    private final int ventana;
+    private final Predicate<MailMessage> aceptar;
 
     public Pop3Client(String host, int port, String user, String password) {
+        this(host, port, user, password, 200, m -> true);
+    }
+
+    public Pop3Client(String host, int port, String user, String password, int ventana, Predicate<MailMessage> aceptar) {
         this.host = host;
         this.port = port;
         this.user = user;
         this.password = password;
+        this.ventana = Math.max(1, ventana);
+        this.aceptar = aceptar;
     }
 
     /** Verifica conexion y login; devuelve la cantidad de mensajes en el buzon. */
@@ -44,11 +56,12 @@ public class Pop3Client implements MailReader {
     public List<MailMessage> fetchAll() throws IOException {
         List<MailMessage> out = new ArrayList<>();
         try (Session s = open()) {
-            Map<Integer, String> uids = s.uidl();
-            for (Map.Entry<Integer, String> e : uids.entrySet()) {
-                s.cmd("RETR " + e.getKey());
-                String raw = s.multiline();
-                out.add(MailParser.parse(e.getValue(), raw));
+            int total = Integer.parseInt(s.cmd("STAT").split(" ")[0]);
+            for (int n = Math.max(1, total - ventana + 1); n <= total; n++) {
+                String uid = s.cmd("UIDL " + n).split("\\s+")[1];
+                s.cmd("TOP " + n + " 0");
+                MailMessage m = MailParser.parse(uid, s.multiline());
+                if (aceptar.test(m)) out.add(m);
             }
             s.cmd("QUIT");
         }
@@ -58,9 +71,10 @@ public class Pop3Client implements MailReader {
     @Override
     public void delete(MailMessage m) throws IOException {
         try (Session s = open()) {
-            for (Map.Entry<Integer, String> e : s.uidl().entrySet()) {
-                if (e.getValue().equals(m.id())) {
-                    s.cmd("DELE " + e.getKey());
+            int total = Integer.parseInt(s.cmd("STAT").split(" ")[0]);
+            for (int n = total; n >= Math.max(1, total - ventana + 1); n--) {
+                if (s.cmd("UIDL " + n).split("\\s+")[1].equals(m.id())) {
+                    s.cmd("DELE " + n);
                     break;
                 }
             }
@@ -117,16 +131,6 @@ public class Pop3Client implements MailReader {
                 sb.append(line).append('\n');
             }
             return new String(sb.toString().getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
-        }
-
-        Map<Integer, String> uidl() throws IOException {
-            cmd("UIDL");
-            Map<Integer, String> map = new LinkedHashMap<>();
-            for (String l : multiline().split("\n")) {
-                String[] p = l.trim().split("\\s+");
-                if (p.length == 2) map.put(Integer.parseInt(p[0]), p[1]);
-            }
-            return map;
         }
 
         @Override

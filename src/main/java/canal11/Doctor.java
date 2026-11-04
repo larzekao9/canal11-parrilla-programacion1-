@@ -26,10 +26,10 @@ public class Doctor {
                 rs.next();
                 System.out.println("  OK conectado a " + rs.getString(1));
             }
-            try (ResultSet rs = st.executeQuery("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")) {
+            try (ResultSet rs = st.executeQuery("SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema()")) {
                 rs.next();
                 int n = rs.getInt(1);
-                System.out.println("  tablas en public: " + n + (n == 0 ? "  (ejecute canal11.App para crear el esquema)" : ""));
+                System.out.println("  tablas en el esquema actual: " + n + (n == 0 ? "  (ejecute canal11.App para crear el esquema)" : ""));
             }
         } catch (Exception e) {
             ok = false;

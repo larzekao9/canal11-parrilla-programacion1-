@@ -36,6 +36,12 @@ public class CommandRouter {
         commands.put(spec.name().toUpperCase(), spec);
     }
 
+    /** true si el remitente es un usuario registrado y activo (el daemon real ignora a los demas sin responderles). */
+    public boolean isKnownSender(String senderEmail) {
+        if (senderEmail == null || senderEmail.isBlank()) return false;
+        return users.findByEmail(senderEmail.trim()).map(Usuario::activo).orElse(false);
+    }
+
     public String process(String subject, String senderEmail) {
         try {
             return doProcess(subject, senderEmail);

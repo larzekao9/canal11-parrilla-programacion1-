@@ -13,8 +13,15 @@ public final class MailFactory {
     public static int smtpPort()     { return Integer.parseInt(DbConfig.get("mail.smtp.port", "25")); }
     public static String mailUser()  { return DbConfig.require("mail.user"); }
 
+    /** Cliente para diagnostico (sin filtro). */
     public static Pop3Client pop3() {
         return new Pop3Client(pop3Host(), pop3Port(), mailUser(), DbConfig.require("mail.password"));
+    }
+
+    /** Cliente para el daemon: ventana reciente y solo correos aceptados por el filtro. */
+    public static Pop3Client pop3(java.util.function.Predicate<MailMessage> aceptar) {
+        int ventana = Integer.parseInt(DbConfig.get("mail.ventana", "200"));
+        return new Pop3Client(pop3Host(), pop3Port(), mailUser(), DbConfig.require("mail.password"), ventana, aceptar);
     }
 
     public static SmtpClient smtp() {
