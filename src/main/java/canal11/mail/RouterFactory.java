@@ -2,6 +2,8 @@ package canal11.mail;
 
 import canal11.emision.AuditoriaService;
 import canal11.gestion.UsuarioRepository;
+import canal11.comercial.ClienteService;
+import canal11.comercial.PautaService;
 import canal11.gestion.MaterialService;
 import canal11.gestion.ProgramaService;
 import canal11.gestion.ValidacionService;
@@ -30,6 +32,8 @@ public final class RouterFactory {
         new MaterialService(auditoria).registerAll(router);   // CU4
         new ValidacionService(auditoria).registerAll(router); // CU5
         new ParrillaService(auditoria).registerAll(router);   // CU3
+        new ClienteService(auditoria).registerAll(router);    // CU6
+        new PautaService(auditoria).registerAll(router);      // CU6
         // Resto de CU: registrar aqui.
         return router;
     }
