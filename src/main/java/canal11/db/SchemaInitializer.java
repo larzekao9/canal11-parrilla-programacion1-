@@ -67,6 +67,7 @@ public final class SchemaInitializer {
             activo         BOOLEAN NOT NULL DEFAULT TRUE
         )
         """,
+        "ALTER TABLE materiales ADD COLUMN IF NOT EXISTS registrado_at TIMESTAMP NOT NULL DEFAULT now()",
         """
         CREATE TABLE IF NOT EXISTS parrillas (
             id           SERIAL PRIMARY KEY,

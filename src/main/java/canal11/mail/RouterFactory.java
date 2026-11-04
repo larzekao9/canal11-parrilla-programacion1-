@@ -6,6 +6,7 @@ import canal11.comercial.ClienteService;
 import canal11.comercial.PautaService;
 import canal11.emision.EmisionService;
 import canal11.gestion.MaterialService;
+import canal11.reporte.ReporteService;
 import canal11.gestion.ProgramaService;
 import canal11.gestion.ValidacionService;
 import canal11.programacion.ParrillaService;
@@ -36,7 +37,7 @@ public final class RouterFactory {
         new ClienteService(auditoria).registerAll(router);    // CU6
         new PautaService(auditoria).registerAll(router);      // CU6
         new EmisionService(auditoria).registerAll(router);    // CU7
-        // Resto de CU: registrar aqui.
+        new ReporteService(auditoria).registerAll(router);    // CU8
         return router;
     }
 }
