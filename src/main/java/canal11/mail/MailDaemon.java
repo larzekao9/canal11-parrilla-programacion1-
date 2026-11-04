@@ -62,9 +62,17 @@ public class MailDaemon {
     }
 
     public static void main(String[] args) throws Exception {
-        FileMailbox mailbox = new FileMailbox(Path.of(DbConfig.get("mail.simulado.dir", "buzon-simulado")));
         CommandRouter router = RouterFactory.create();
         long interval = Long.parseLong(DbConfig.get("mail.intervalo.ms", "10000"));
-        new MailDaemon(mailbox, mailbox, router).run(interval);
+        String modo = DbConfig.get("mail.modo", "simulado");
+        if (modo.equalsIgnoreCase("real")) {
+            System.out.println("[daemon] modo REAL: POP3 " + MailFactory.pop3Host() + ":" + MailFactory.pop3Port()
+                    + ", SMTP " + MailFactory.smtpHost() + ":" + MailFactory.smtpPort());
+            new MailDaemon(MailFactory.pop3(), MailFactory.smtp(), router).run(interval);
+        } else {
+            System.out.println("[daemon] modo SIMULADO (carpeta de archivos). Para correo real: mail.modo=real");
+            FileMailbox mailbox = new FileMailbox(Path.of(DbConfig.get("mail.simulado.dir", "buzon-simulado")));
+            new MailDaemon(mailbox, mailbox, router).run(interval);
+        }
     }
 }

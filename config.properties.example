@@ -12,3 +12,21 @@ admin.nombre=Admin
 admin.apellido=Canal11
 admin.email=admin@canal11.com
 admin.password=CAMBIAR_MIN_8
+
+# --- Correo (modo simulado por defecto: carpeta buzon-simulado/) ---
+# mail.modo=real  usa el servidor de correo del curso (POP3 para leer, SMTP para responder)
+mail.modo=simulado
+mail.pop3.host=mail.tecnoweb.org.bo
+mail.pop3.port=110
+mail.user=grupo12sa
+mail.password=CAMBIAR
+# Directo desde la red de la facultad: mail.tecnoweb.org.bo:25
+# Por tunel SSH (ssh -L 2525:mail.tecnoweb.org.bo:25 root@<ip_vps> -N): localhost:2525
+mail.smtp.host=mail.tecnoweb.org.bo
+mail.smtp.port=25
+mail.from=grupo12sa@tecnoweb.org.bo
+
+# --- Base de datos del servidor del curso (reemplaza los valores locales de arriba) ---
+# db.url=jdbc:postgresql://db.tecnoweb.org.bo:5432/db_grupo12sa
+# db.user=grupo12sa
+# db.password=CAMBIAR
