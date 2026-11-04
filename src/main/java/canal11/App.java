@@ -1,6 +1,7 @@
 package canal11;
 
 import canal11.db.DbConnection;
+import canal11.db.Seed;
 import canal11.db.SchemaInitializer;
 
 import java.sql.Connection;
@@ -14,6 +15,7 @@ public class App {
             System.out.println(SchemaInitializer.ensureAdminSeed(c)
                     ? "Administrador semilla creado."
                     : "Ya existe un administrador; no se creo semilla.");
+            System.out.println("Programas base agregados: " + Seed.ensureProgramas(c));
         }
     }
 }
