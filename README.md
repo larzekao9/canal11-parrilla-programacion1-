@@ -31,7 +31,7 @@ Cada service registra sus comandos en el router (`registerAll`); `HELP[]` (o `he
 
 ## Probar el sistema
 
-1. Copiar `config.properties.example` a `config.properties` y completar BD (`db.*`), admin semilla (`admin.*`) y correo (`mail.*`). Ese archivo NO se sube a git.
+1. Copiar `config.properties.example` a `config.properties` y completar BD (`db.*`), admin semilla (`admin.*`) y correo (`mail.*`). Este archivo SI se sube a git (proyecto academico).
 2. Crear tablas y admin: `mvn -q compile exec:java -Dexec.mainClass=canal11.App`
 3. Verificar conexiones (BD, POP3, SMTP; sin enviar nada): `mvn -q compile exec:java -Dexec.mainClass=canal11.Doctor`
 4. Probar comandos sin correo, escribiendo el Subject: `mvn -q compile exec:java -Dexec.mainClass=canal11.mail.ConsoleSimulator`

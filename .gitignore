@@ -7,9 +7,6 @@ node_modules/
 target/
 *.class
 
-# Configuracion local con credenciales (NUNCA al repo)
-config.properties
-
 # Buzon simulado (correos de prueba)
 buzon-simulado/
 
