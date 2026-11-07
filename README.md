@@ -7,6 +7,8 @@ Java 17 + Maven + PostgreSQL. Tecnología Web (INF513) – Grupo #12.
 - `docs/levantamiento/` – levantamiento de información (AS-IS) del canal.
 - `procesos/` – guía de handoff, plan base, planes por caso de uso (CU1–CU8), plan por fases y runbook.
 
+Guia de comandos y como usarlos: `COMANDOS.md`.
+
 Orden de lectura: `procesos/guia-actualizacion-y-handoff.md` → `procesos/plan-por-fases.md`.
 
 ## Estructura del codigo
