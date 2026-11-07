@@ -1,4 +1,4 @@
-package canal11.gestion;
+package canal11.gestion.service;
 
 import canal11.testutil.DbTestBase;
 import org.junit.jupiter.api.Test;

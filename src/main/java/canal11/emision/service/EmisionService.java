@@ -1,6 +1,7 @@
-package canal11.emision;
+package canal11.emision.service;
 
 import canal11.db.DbConfig;
+import canal11.emision.repository.EmisionRepository;
 import canal11.db.Jdbc;
 import canal11.mail.CommandRouter;
 import canal11.mail.CommandSpec;
@@ -31,6 +32,8 @@ public class EmisionService {
 
     public static final List<String> ESTADOS = List.of("EMITIDO", "PARCIAL", "NO_EMITIDO", "REEMPLAZADO");
     static final Set<String> CAMPOS = Set.of("inicio_real", "fin_real", "estado", "observacion");
+
+    private static final EmisionRepository REPO = new EmisionRepository();
 
     private final AuditoriaService auditoria;
 
@@ -70,30 +73,27 @@ public class EmisionService {
             Integer bloqueId = null, spotId = null;
             String estadoParrilla;
             if (esSpot) {
-                Map<String, Object> s = Jdbc.one(c, "SELECT s.id, s.hora_programada, pa.fecha, pa.estado AS pestado FROM pauta_spots s "
-                        + "JOIN parrilla_bloques b ON b.id = s.parrilla_bloque_id JOIN parrillas pa ON pa.id = b.parrilla_id WHERE s.id = ? FOR UPDATE OF s", targetId);
+                Map<String, Object> s = REPO.spotForUpdate(c, targetId);
                 if (s == null) throw new CommandException("Spot no encontrado: " + targetId);
                 spotId = targetId;
                 programado = ((LocalDate) s.get("fecha")).atTime((LocalTime) s.get("hora_programada"));
                 estadoParrilla = (String) s.get("pestado");
-                if (Jdbc.count(c, "SELECT 1 FROM emisiones_reales WHERE pauta_spot_id = ?", spotId) > 0)
+                if (REPO.spotTieneEmision(c, spotId))
                     throw new CommandException("El spot ya tiene una emision registrada; use UPDEMI para corregirla.");
             } else {
-                Map<String, Object> b = Jdbc.one(c, "SELECT b.id, b.hora_inicio, pa.fecha, pa.estado AS pestado FROM parrilla_bloques b "
-                        + "JOIN parrillas pa ON pa.id = b.parrilla_id WHERE b.id = ? FOR UPDATE OF b", targetId);
+                Map<String, Object> b = REPO.bloqueForUpdate(c, targetId);
                 if (b == null) throw new CommandException("Bloque no encontrado: " + targetId);
                 bloqueId = targetId;
                 programado = ((LocalDate) b.get("fecha")).atTime((LocalTime) b.get("hora_inicio"));
                 estadoParrilla = (String) b.get("pestado");
-                if (Jdbc.count(c, "SELECT 1 FROM emisiones_reales WHERE parrilla_bloque_id = ?", bloqueId) > 0)
+                if (REPO.bloqueTieneEmision(c, bloqueId))
                     throw new CommandException("El bloque ya tiene una emision registrada; use UPDEMI para corregirla.");
             }
             if ("BORRADOR".equals(estadoParrilla)) throw new CommandException("La parrilla esta en BORRADOR; solo se registran emisiones de parrillas publicadas.");
             int desv = (int) Duration.between(programado, inicio).getSeconds();
-            int id = Jdbc.insert(c, "INSERT INTO emisiones_reales (parrilla_bloque_id, pauta_spot_id, inicio_real, fin_real, estado, desviacion_seg, observacion, registrado_por) "
-                    + "VALUES (?,?,?,?,?,?,?,?) RETURNING id", bloqueId, spotId, inicio, fin, estado, desv, obs, actor.id());
+            int id = REPO.insert(c, bloqueId, spotId, inicio, fin, estado, desv, obs, actor.id());
             if (spotId != null) actualizarEstadoSpot(c, spotId, estado);
-            auditoria.registrar(c, actor.id(), "EMISION_REGISTRAR", "emisiones_reales", id, null, Jdbc.json(c, "emisiones_reales", id), Args.cmdText("INSEMI", p));
+            auditoria.registrar(c, actor.id(), "EMISION_REGISTRAR", "emisiones_reales", id, null, REPO.snapshot(c, id), Args.cmdText("INSEMI", p));
             return "OK: emision " + id + " registrada (" + estado + ", desviacion " + desv + " s" + (Math.abs(desv) <= toleranciaSeg() ? ", a tiempo)" : ")");
         });
     }
@@ -104,12 +104,9 @@ public class EmisionService {
         int id = InputValidator.validateId(p.get(0), "id");
         Map<String, String> f = Args.fields(p, 1, CAMPOS, usage);
         return Jdbc.tx(c -> {
-            Map<String, Object> cur = Jdbc.one(c, "SELECT e.*, COALESCE(pa1.fecha, pa2.fecha) AS fecha, COALESCE(b1.hora_inicio, s.hora_programada) AS hora_prog "
-                    + "FROM emisiones_reales e LEFT JOIN parrilla_bloques b1 ON b1.id = e.parrilla_bloque_id LEFT JOIN parrillas pa1 ON pa1.id = b1.parrilla_id "
-                    + "LEFT JOIN pauta_spots s ON s.id = e.pauta_spot_id LEFT JOIN parrilla_bloques b2 ON b2.id = s.parrilla_bloque_id "
-                    + "LEFT JOIN parrillas pa2 ON pa2.id = b2.parrilla_id WHERE e.id = ? FOR UPDATE OF e", id);
+            Map<String, Object> cur = REPO.findConProgramadoForUpdate(c, id);
             if (cur == null) throw new CommandException("Emision no encontrada: " + id);
-            String antes = Jdbc.json(c, "emisiones_reales", id);
+            String antes = REPO.snapshot(c, id);
             LocalDateTime inicio = (LocalDateTime) cur.get("inicio_real"), fin = (LocalDateTime) cur.get("fin_real");
             String estado = (String) cur.get("estado"), obs = (String) cur.get("observacion");
             for (Map.Entry<String, String> e : f.entrySet()) {
@@ -124,10 +121,9 @@ public class EmisionService {
             if (fin != null && !fin.isAfter(inicio)) throw new CommandException("fin debe ser posterior a inicio");
             LocalDateTime programado = ((LocalDate) cur.get("fecha")).atTime((LocalTime) cur.get("hora_prog"));
             int desv = (int) Duration.between(programado, inicio).getSeconds();
-            Jdbc.exec(c, "UPDATE emisiones_reales SET inicio_real = ?, fin_real = ?, estado = ?, desviacion_seg = ?, observacion = ? WHERE id = ?",
-                    inicio, fin, estado, desv, obs, id);
+            REPO.update(c, id, inicio, fin, estado, desv, obs);
             if (cur.get("pauta_spot_id") != null) actualizarEstadoSpot(c, ((Number) cur.get("pauta_spot_id")).intValue(), estado);
-            auditoria.registrar(c, actor.id(), "EMISION_CORREGIR", "emisiones_reales", id, antes, Jdbc.json(c, "emisiones_reales", id), Args.cmdText("UPDEMI", p));
+            auditoria.registrar(c, actor.id(), "EMISION_CORREGIR", "emisiones_reales", id, antes, REPO.snapshot(c, id), Args.cmdText("UPDEMI", p));
             return "OK: emision " + id + " actualizada (" + estado + ", desviacion " + desv + " s)";
         });
     }
@@ -135,7 +131,7 @@ public class EmisionService {
     /** EMITIDO o PARCIAL cuentan como emitido; NO_EMITIDO y REEMPLAZADO como no emitido. */
     private static void actualizarEstadoSpot(Connection c, int spotId, String estadoEmision) throws SQLException {
         String st = estadoEmision.equals("EMITIDO") || estadoEmision.equals("PARCIAL") ? "EMITIDO" : "NO_EMITIDO";
-        Jdbc.exec(c, "UPDATE pauta_spots SET estado = ? WHERE id = ?", st, spotId);
+        REPO.actualizarEstadoSpot(c, spotId, st);
     }
 
     // ------------------------------------------------------------------ consultas
@@ -145,12 +141,7 @@ public class EmisionService {
         int id = InputValidator.validateId(p.get(0), "parrilla_id");
         return Jdbc.tx(c -> {
             exigirParrilla(c, id);
-            List<Map<String, Object>> rows = Jdbc.query(c,
-                    "SELECT e.id, CASE WHEN e.pauta_spot_id IS NULL THEN 'bloque ' || e.parrilla_bloque_id ELSE 'spot ' || e.pauta_spot_id END AS objetivo, "
-                  + "e.inicio_real, e.fin_real, e.estado, e.desviacion_seg AS desv, e.observacion "
-                  + "FROM emisiones_reales e LEFT JOIN parrilla_bloques b1 ON b1.id = e.parrilla_bloque_id "
-                  + "LEFT JOIN pauta_spots s ON s.id = e.pauta_spot_id LEFT JOIN parrilla_bloques b2 ON b2.id = s.parrilla_bloque_id "
-                  + "WHERE COALESCE(b1.parrilla_id, b2.parrilla_id) = ? ORDER BY e.inicio_real", id);
+            List<Map<String, Object>> rows = REPO.listByParrilla(c, id);
             return "Emisiones de la parrilla " + id + " (" + rows.size() + "):\n"
                     + TextTable.render(rows, "id", "objetivo", "inicio_real", "fin_real", "estado", "desv", "observacion");
         });
@@ -187,16 +178,10 @@ public class EmisionService {
      */
     public static List<Map<String, Object>> filasConciliacion(Connection c, int parrillaId) throws SQLException {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (Map<String, Object> b : Jdbc.query(c,
-                "SELECT b.id, b.tipo, pa.fecha, b.hora_inicio, e.inicio_real, e.estado AS est, e.desviacion_seg AS desv "
-              + "FROM parrilla_bloques b JOIN parrillas pa ON pa.id = b.parrilla_id LEFT JOIN emisiones_reales e ON e.parrilla_bloque_id = b.id "
-              + "WHERE b.parrilla_id = ? AND b.tipo <> 'pausa_comercial' ORDER BY b.hora_inicio", parrillaId)) {
+        for (Map<String, Object> b : REPO.bloquesConEmision(c, parrillaId)) {
             out.add(fila("bloque", b.get("id"), ((LocalDate) b.get("fecha")).atTime((LocalTime) b.get("hora_inicio")), b));
         }
-        for (Map<String, Object> s : Jdbc.query(c,
-                "SELECT s.id, pa.fecha, s.hora_programada, e.inicio_real, e.estado AS est, e.desviacion_seg AS desv "
-              + "FROM pauta_spots s JOIN parrilla_bloques b ON b.id = s.parrilla_bloque_id JOIN parrillas pa ON pa.id = b.parrilla_id "
-              + "LEFT JOIN emisiones_reales e ON e.pauta_spot_id = s.id WHERE b.parrilla_id = ? ORDER BY s.hora_programada", parrillaId)) {
+        for (Map<String, Object> s : REPO.spotsConEmision(c, parrillaId)) {
             out.add(fila("spot", s.get("id"), ((LocalDate) s.get("fecha")).atTime((LocalTime) s.get("hora_programada")), s));
         }
         return out;
@@ -214,7 +199,7 @@ public class EmisionService {
     }
 
     private static Map<String, Object> exigirParrilla(Connection c, int id) throws SQLException {
-        Map<String, Object> pa = Jdbc.one(c, "SELECT * FROM parrillas WHERE id = ?", id);
+        Map<String, Object> pa = REPO.parrillaById(c, id);
         if (pa == null) throw new CommandException("Parrilla no encontrada: " + id);
         return pa;
     }

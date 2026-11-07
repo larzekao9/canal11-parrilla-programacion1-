@@ -1,7 +1,8 @@
-package canal11.emision;
+package canal11.emision.service;
 
 import canal11.db.DbConnection;
 import canal11.db.Jdbc;
+import canal11.emision.repository.AuditoriaRepository;
 import canal11.mail.CommandSpec;
 import canal11.mail.CommandRouter;
 import canal11.model.Usuario;
@@ -11,9 +12,7 @@ import canal11.util.InputValidator;
 import canal11.util.TextTable;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.sql.Types;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,6 +27,7 @@ import java.util.Map;
 public class AuditoriaService {
 
     private static final int MAX_FILAS = 100;
+    private final AuditoriaRepository repo = new AuditoriaRepository();
 
     /**
      * @param antes   JSON (texto) del estado previo o null
@@ -44,22 +44,7 @@ public class AuditoriaService {
 
     public void registrar(Connection c, Integer userId, String accion, String entidad, Integer entidadId,
                           String antes, String despues, String comando) throws SQLException {
-        String sql = "INSERT INTO auditoria_logs (user_id, accion, entidad, entidad_id, antes, despues, comando) "
-                   + "VALUES (?, ?, ?, ?, ?::jsonb, ?::jsonb, ?)";
-        try (PreparedStatement ps = c.prepareStatement(sql)) {
-            setNullableInt(ps, 1, userId);
-            ps.setString(2, accion);
-            ps.setString(3, entidad);
-            setNullableInt(ps, 4, entidadId);
-            ps.setString(5, antes);
-            ps.setString(6, despues);
-            ps.setString(7, comando);
-            ps.executeUpdate();
-        }
-    }
-
-    private static void setNullableInt(PreparedStatement ps, int idx, Integer v) throws SQLException {
-        if (v == null) ps.setNull(idx, Types.INTEGER); else ps.setInt(idx, v);
+        repo.insert(c, userId, accion, entidad, entidadId, antes, despues, comando);
     }
 
     // ------------------------------------------------------------------ consultas (solo administrador)
@@ -92,12 +77,8 @@ public class AuditoriaService {
                 params.add(InputValidator.validateText(v, "entidad", 40).toLowerCase());
             }
         }
-        String sql = "SELECT a.id, a.created_at AS fecha, COALESCE(x.email,'-') AS usuario, a.accion, "
-                   + "COALESCE(a.entidad,'-') AS entidad, a.entidad_id, a.comando "
-                   + "FROM auditoria_logs a LEFT JOIN users x ON x.id = a.user_id" + where
-                   + " ORDER BY a.id DESC LIMIT " + MAX_FILAS;
         return Jdbc.tx(c -> {
-            List<Map<String, Object>> rows = Jdbc.query(c, sql, params.toArray());
+            List<Map<String, Object>> rows = repo.listar(c, where.toString(), params, MAX_FILAS);
             registrar(c, u.id(), "CONSULTA_AUDITORIA", "auditoria_logs", null, null, null, "LISAUD");
             return "Auditoria (ultimos " + MAX_FILAS + " como maximo):\n"
                     + TextTable.render(rows, "id", "fecha", "usuario", "accion", "entidad", "entidad_id", "comando");
@@ -109,11 +90,7 @@ public class AuditoriaService {
         String entidad = InputValidator.validateText(p.get(0), "entidad", 40).toLowerCase();
         int id = InputValidator.validateId(p.get(1), "id");
         return Jdbc.tx(c -> {
-            List<Map<String, Object>> rows = Jdbc.query(c,
-                    "SELECT a.id, a.created_at AS fecha, COALESCE(x.email,'-') AS usuario, a.accion, "
-                  + "a.antes::text AS antes, a.despues::text AS despues "
-                  + "FROM auditoria_logs a LEFT JOIN users x ON x.id = a.user_id "
-                  + "WHERE a.entidad = ? AND a.entidad_id = ? ORDER BY a.id", entidad, id);
+            List<Map<String, Object>> rows = repo.historial(c, entidad, id);
             if (rows.isEmpty()) return "(sin historial para " + entidad + " " + id + ")";
             StringBuilder sb = new StringBuilder("Historial de " + entidad + " " + id + ":\n");
             for (Map<String, Object> r : rows) {

@@ -1,7 +1,8 @@
-package canal11.gestion;
+package canal11.gestion.service;
 
 import canal11.db.Jdbc;
-import canal11.emision.AuditoriaService;
+import canal11.emision.service.AuditoriaService;
+import canal11.gestion.repository.UsuarioRepository;
 import canal11.mail.CommandRouter;
 import canal11.mail.CommandSpec;
 import canal11.model.Usuario;
@@ -26,6 +27,7 @@ public class UsuarioService {
     private static final String[] COLS = {"id", "ci", "nombre", "apellido", "rol", "telefono", "email", "activo"};
 
     private final AuditoriaService auditoria;
+    private final UsuarioRepository repo = new UsuarioRepository();
 
     public UsuarioService(AuditoriaService auditoria) {
         this.auditoria = auditoria;
@@ -52,11 +54,10 @@ public class UsuarioService {
         String email = InputValidator.validateEmail(p.get(5), "email");
         String pass = password(p.get(6));
         return Jdbc.tx(c -> {
-            if (Jdbc.count(c, "SELECT 1 FROM users WHERE ci = ?", ci) > 0) throw new CommandException("Ya existe un usuario con ese ci.");
-            if (Jdbc.count(c, "SELECT 1 FROM users WHERE lower(email) = ?", email) > 0) throw new CommandException("Ya existe un usuario con ese email.");
-            int id = Jdbc.insert(c, "INSERT INTO users (ci, nombre, apellido, rol, telefono, email, password) "
-                    + "VALUES (?,?,?,?,?,?,?) RETURNING id", ci, nombre, apellido, rol, tel, email, BCrypt.hashpw(pass, BCrypt.gensalt()));
-            auditoria.registrar(c, actor.id(), "USUARIO_CREAR", "users", id, null, Jdbc.json(c, "users", id), Args.cmdText("INSUSU", p));
+            if (repo.existeCi(c, ci)) throw new CommandException("Ya existe un usuario con ese ci.");
+            if (repo.existeEmail(c, email, null)) throw new CommandException("Ya existe un usuario con ese email.");
+            int id = repo.insert(c, ci, nombre, apellido, rol, tel, email, BCrypt.hashpw(pass, BCrypt.gensalt()));
+            auditoria.registrar(c, actor.id(), "USUARIO_CREAR", "users", id, null, repo.snapshot(c, id), Args.cmdText("INSUSU", p));
             return "OK: usuario creado con ID " + id;
         });
     }
@@ -66,10 +67,9 @@ public class UsuarioService {
         return Jdbc.tx(c -> {
             List<Map<String, Object>> rows;
             if (Args.isAll(p)) {
-                rows = Jdbc.query(c, "SELECT id, ci, nombre, apellido, rol, telefono, email, activo FROM users ORDER BY id");
+                rows = repo.list(c);
             } else {
-                String rol = InputValidator.validateEnum(p.get(0), "rol", ROLES);
-                rows = Jdbc.query(c, "SELECT id, ci, nombre, apellido, rol, telefono, email, activo FROM users WHERE rol = ? ORDER BY id", rol);
+                rows = repo.listByRol(c, InputValidator.validateEnum(p.get(0), "rol", ROLES));
             }
             return "Listando usuarios (" + rows.size() + "):\n" + TextTable.render(rows, COLS);
         });
@@ -79,7 +79,7 @@ public class UsuarioService {
         Args.exact(p, 1, "GETUSU[id]");
         int id = InputValidator.validateId(p.get(0), "id");
         return Jdbc.tx(c -> {
-            Map<String, Object> r = Jdbc.one(c, "SELECT id, ci, nombre, apellido, rol, telefono, email, activo FROM users WHERE id = ?", id);
+            Map<String, Object> r = repo.findPublicById(c, id);
             if (r == null) throw new CommandException("Usuario no encontrado: " + id);
             return TextTable.detail(r, COLS);
         });
@@ -91,9 +91,9 @@ public class UsuarioService {
         int id = InputValidator.validateId(p.get(0), "id");
         Map<String, String> f = Args.fields(p, 1, CAMPOS, usage);
         return Jdbc.tx(c -> {
-            Map<String, Object> cur = Jdbc.one(c, "SELECT * FROM users WHERE id = ? FOR UPDATE", id);
+            Map<String, Object> cur = repo.findByIdForUpdate(c, id);
             if (cur == null) throw new CommandException("Usuario no encontrado: " + id);
-            String antes = Jdbc.json(c, "users", id);
+            String antes = repo.snapshot(c, id);
             List<String> sets = new ArrayList<>();
             List<Object> vals = new ArrayList<>();
             boolean seraAdminActivo = Usuario.ADMIN.equals(cur.get("rol")) && (Boolean) cur.get("activo");
@@ -109,7 +109,7 @@ public class UsuarioService {
                     case "telefono" -> add(sets, vals, "telefono", telefono(v));
                     case "email" -> {
                         String em = InputValidator.validateEmail(v, "email");
-                        if (Jdbc.count(c, "SELECT 1 FROM users WHERE lower(email) = ? AND id <> ?", em, id) > 0)
+                        if (repo.existeEmail(c, em, id))
                             throw new CommandException("Ya existe un usuario con ese email.");
                         add(sets, vals, "email", em);
                     }
@@ -125,9 +125,8 @@ public class UsuarioService {
             }
             boolean eraAdminActivo = Usuario.ADMIN.equals(cur.get("rol")) && (Boolean) cur.get("activo");
             if (eraAdminActivo && !seraAdminActivo) exigirOtroAdmin(c, id);
-            vals.add(id);
-            Jdbc.exec(c, "UPDATE users SET " + String.join(", ", sets) + " WHERE id = ?", vals.toArray());
-            auditoria.registrar(c, actor.id(), "USUARIO_ACTUALIZAR", "users", id, antes, Jdbc.json(c, "users", id), Args.cmdText("UPDUSU", p));
+            repo.update(c, id, sets, vals);
+            auditoria.registrar(c, actor.id(), "USUARIO_ACTUALIZAR", "users", id, antes, repo.snapshot(c, id), Args.cmdText("UPDUSU", p));
             return "OK: usuario " + id + " actualizado";
         });
     }
@@ -137,20 +136,19 @@ public class UsuarioService {
         int id = InputValidator.validateId(p.get(0), "id");
         if (id == actor.id()) throw new CommandException("No puede desactivarse a si mismo.");
         return Jdbc.tx(c -> {
-            Map<String, Object> cur = Jdbc.one(c, "SELECT * FROM users WHERE id = ? FOR UPDATE", id);
+            Map<String, Object> cur = repo.findByIdForUpdate(c, id);
             if (cur == null) throw new CommandException("Usuario no encontrado: " + id);
             if (!(Boolean) cur.get("activo")) return "OK: el usuario " + id + " ya estaba desactivado";
             if (Usuario.ADMIN.equals(cur.get("rol"))) exigirOtroAdmin(c, id);
-            String antes = Jdbc.json(c, "users", id);
-            Jdbc.exec(c, "UPDATE users SET activo = FALSE WHERE id = ?", id);
-            Jdbc.exec(c, "DELETE FROM auth_sessions WHERE user_id = ?", id);
-            auditoria.registrar(c, actor.id(), "USUARIO_DESACTIVAR", "users", id, antes, Jdbc.json(c, "users", id), Args.cmdText("DELUSU", p));
+            String antes = repo.snapshot(c, id);
+            repo.desactivar(c, id);
+            auditoria.registrar(c, actor.id(), "USUARIO_DESACTIVAR", "users", id, antes, repo.snapshot(c, id), Args.cmdText("DELUSU", p));
             return "OK: usuario " + id + " desactivado";
         });
     }
 
-    private static void exigirOtroAdmin(Connection c, int excluirId) throws SQLException {
-        if (Jdbc.count(c, "SELECT 1 FROM users WHERE rol = 'administrador' AND activo AND id <> ?", excluirId) == 0) {
+    private void exigirOtroAdmin(Connection c, int excluirId) throws SQLException {
+        if (!repo.existeOtroAdminActivo(c, excluirId)) {
             throw new CommandException("Debe existir al menos un administrador activo.");
         }
     }

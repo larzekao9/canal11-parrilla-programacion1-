@@ -1,7 +1,8 @@
-package canal11.programacion;
+package canal11.programacion.service;
 
 import canal11.db.Jdbc;
-import canal11.emision.AuditoriaService;
+import canal11.emision.service.AuditoriaService;
+import canal11.programacion.repository.ParrillaRepository;
 import canal11.mail.CommandRouter;
 import canal11.mail.CommandSpec;
 import canal11.model.Usuario;
@@ -30,6 +31,7 @@ public class ParrillaService {
     static final Set<String> CAMPOS_BLOQUE = Set.of("hora_inicio", "hora_fin", "programa_id", "material_id", "tipo");
 
     private final AuditoriaService auditoria;
+    private final ParrillaRepository repo = new ParrillaRepository();
 
     public ParrillaService(AuditoriaService auditoria) {
         this.auditoria = auditoria;
@@ -59,27 +61,25 @@ public class ParrillaService {
         Args.exact(p, 1, "INSPAR[\"YYYY-MM-DD\"]");
         LocalDate fecha = InputValidator.validateDate(p.get(0), "fecha");
         return Jdbc.tx(c -> {
-            if (Jdbc.count(c, "SELECT 1 FROM parrillas WHERE fecha = ?", fecha) > 0)
+            if (repo.existeFecha(c, fecha))
                 throw new CommandException("Ya existe una parrilla para el " + fecha + ".");
-            int id = Jdbc.insert(c, "INSERT INTO parrillas (fecha, creado_por) VALUES (?, ?) RETURNING id", fecha, actor.id());
-            auditoria.registrar(c, actor.id(), "PARRILLA_CREAR", "parrillas", id, null, Jdbc.json(c, "parrillas", id), Args.cmdText("INSPAR", p));
+            int id = repo.insert(c, fecha, actor.id());
+            auditoria.registrar(c, actor.id(), "PARRILLA_CREAR", "parrillas", id, null, repo.snapshot(c, id), Args.cmdText("INSPAR", p));
             return "OK: parrilla creada con ID " + id + " para el " + fecha + " (BORRADOR)";
         });
     }
 
     String list(Usuario actor, List<String> p) {
         Args.count(p, 1, 2, "LISPAR[\"*\"] | LISPAR[\"desde\",\"hasta\"]");
-        String base = "SELECT pa.id, pa.fecha, pa.estado, pa.version, "
-                + "(SELECT count(*) FROM parrilla_bloques b WHERE b.parrilla_id = pa.id) AS bloques FROM parrillas pa";
         return Jdbc.tx(c -> {
             List<Map<String, Object>> rows;
             if (p.size() == 2) {
                 LocalDate d = InputValidator.validateDate(p.get(0), "desde");
                 LocalDate h = InputValidator.validateDate(p.get(1), "hasta");
                 if (h.isBefore(d)) throw new CommandException("hasta no puede ser anterior a desde");
-                rows = Jdbc.query(c, base + " WHERE pa.fecha BETWEEN ? AND ? ORDER BY pa.fecha", d, h);
+                rows = repo.listEntre(c, d, h);
             } else if (Args.isAll(p)) {
-                rows = Jdbc.query(c, base + " ORDER BY pa.fecha DESC LIMIT 30");
+                rows = repo.listUltimas(c);
             } else {
                 throw new CommandException("Uso: LISPAR[\"*\"] | LISPAR[\"desde\",\"hasta\"]");
             }
@@ -91,12 +91,9 @@ public class ParrillaService {
         Args.exact(p, 1, "GETPAR[id]");
         int id = InputValidator.validateId(p.get(0), "id");
         return Jdbc.tx(c -> {
-            Map<String, Object> pa = Jdbc.one(c, "SELECT * FROM parrillas WHERE id = ?", id);
+            Map<String, Object> pa = repo.findById(c, id);
             if (pa == null) throw new CommandException("Parrilla no encontrada: " + id);
-            List<Map<String, Object>> bl = Jdbc.query(c,
-                    "SELECT b.orden, b.id, b.hora_inicio, b.hora_fin, b.tipo, pr.nombre AS programa, b.material_id, m.estado AS mat_estado "
-                  + "FROM parrilla_bloques b JOIN programas pr ON pr.id = b.programa_id LEFT JOIN materiales m ON m.id = b.material_id "
-                  + "WHERE b.parrilla_id = ? ORDER BY b.hora_inicio", id);
+            List<Map<String, Object>> bl = repo.bloquesConMaterial(c, id);
             return "Parrilla " + id + " | fecha " + pa.get("fecha") + " | " + pa.get("estado") + " | version " + pa.get("version") + "\n"
                     + TextTable.render(bl, "orden", "id", "hora_inicio", "hora_fin", "tipo", "programa", "material_id", "mat_estado");
         });
@@ -108,11 +105,10 @@ public class ParrillaService {
         return Jdbc.tx(c -> {
             Map<String, Object> pa = lock(c, id);
             if (!"BORRADOR".equals(pa.get("estado"))) throw new CommandException("Solo se pueden eliminar parrillas en BORRADOR.");
-            if (Jdbc.count(c, "SELECT 1 FROM pauta_spots s JOIN parrilla_bloques b ON b.id = s.parrilla_bloque_id WHERE b.parrilla_id = ?", id) > 0)
+            if (repo.tieneSpots(c, id))
                 throw new CommandException("La parrilla tiene spots de pauta; quitelos primero.");
-            String antes = Jdbc.json(c, "parrillas", id);
-            Jdbc.exec(c, "DELETE FROM parrilla_bloques WHERE parrilla_id = ?", id);
-            Jdbc.exec(c, "DELETE FROM parrillas WHERE id = ?", id);
+            String antes = repo.snapshot(c, id);
+            repo.deleteConBloques(c, id);
             auditoria.registrar(c, actor.id(), "PARRILLA_ELIMINAR", "parrillas", id, antes, null, Args.cmdText("DELPAR", p));
             return "OK: parrilla " + id + " eliminada";
         });
@@ -123,12 +119,11 @@ public class ParrillaService {
         int origen = InputValidator.validateId(p.get(0), "id_origen");
         LocalDate fecha = InputValidator.validateDate(p.get(1), "fecha");
         return Jdbc.tx(c -> {
-            if (Jdbc.one(c, "SELECT id FROM parrillas WHERE id = ?", origen) == null) throw new CommandException("Parrilla origen no encontrada: " + origen);
-            if (Jdbc.count(c, "SELECT 1 FROM parrillas WHERE fecha = ?", fecha) > 0) throw new CommandException("Ya existe una parrilla para el " + fecha + ".");
-            int id = Jdbc.insert(c, "INSERT INTO parrillas (fecha, creado_por) VALUES (?, ?) RETURNING id", fecha, actor.id());
-            int n = Jdbc.exec(c, "INSERT INTO parrilla_bloques (parrilla_id, programa_id, material_id, hora_inicio, hora_fin, orden, tipo) "
-                    + "SELECT ?, programa_id, material_id, hora_inicio, hora_fin, orden, tipo FROM parrilla_bloques WHERE parrilla_id = ?", id, origen);
-            auditoria.registrar(c, actor.id(), "PARRILLA_DUPLICAR", "parrillas", id, null, Jdbc.json(c, "parrillas", id), Args.cmdText("DUPPAR", p));
+            if (!repo.existe(c, origen)) throw new CommandException("Parrilla origen no encontrada: " + origen);
+            if (repo.existeFecha(c, fecha)) throw new CommandException("Ya existe una parrilla para el " + fecha + ".");
+            int id = repo.insert(c, fecha, actor.id());
+            int n = repo.copiarBloques(c, id, origen);
+            auditoria.registrar(c, actor.id(), "PARRILLA_DUPLICAR", "parrillas", id, null, repo.snapshot(c, id), Args.cmdText("DUPPAR", p));
             return "OK: parrilla creada con ID " + id + " para el " + fecha + " copiando " + n + " bloque(s) de la parrilla " + origen + " (sin spots)";
         });
     }
@@ -147,10 +142,9 @@ public class ParrillaService {
         return Jdbc.tx(c -> {
             Map<String, Object> pa = lockEditable(c, parrillaId);
             LocalTime fin = validarBloque(c, pa, 0, programaId, inicio, finParam, materialId, tipo);
-            int id = Jdbc.insert(c, "INSERT INTO parrilla_bloques (parrilla_id, programa_id, material_id, hora_inicio, hora_fin, tipo) "
-                    + "VALUES (?,?,?,?,?,?) RETURNING id", parrillaId, programaId, materialId > 0 ? materialId : null, inicio, fin, tipo);
+            int id = repo.insertBloque(c, parrillaId, programaId, materialId > 0 ? materialId : null, inicio, fin, tipo);
             renumerar(c, parrillaId);
-            auditoria.registrar(c, actor.id(), "BLOQUE_CREAR", "parrilla_bloques", id, null, Jdbc.json(c, "parrilla_bloques", id), Args.cmdText("INSBLO", p));
+            auditoria.registrar(c, actor.id(), "BLOQUE_CREAR", "parrilla_bloques", id, null, repo.snapshotBloque(c, id), Args.cmdText("INSBLO", p));
             subirVersion(c, actor, pa, Args.cmdText("INSBLO", p));
             return "OK: bloque creado con ID " + id + " (" + TextTable.fmt(inicio) + " - " + TextTable.fmt(fin) + ")";
         });
@@ -162,12 +156,12 @@ public class ParrillaService {
         int id = InputValidator.validateId(p.get(0), "bloque_id");
         Map<String, String> f = Args.fields(p, 1, CAMPOS_BLOQUE, usage);
         return Jdbc.tx(c -> {
-            Map<String, Object> b = Jdbc.one(c, "SELECT * FROM parrilla_bloques WHERE id = ?", id);
+            Map<String, Object> b = repo.bloqueById(c, id);
             if (b == null) throw new CommandException("Bloque no encontrado: " + id);
             int parrillaId = ((Number) b.get("parrilla_id")).intValue();
             Map<String, Object> pa = lockEditable(c, parrillaId);
-            b = Jdbc.one(c, "SELECT * FROM parrilla_bloques WHERE id = ?", id); // releer con la parrilla bloqueada
-            String antes = Jdbc.json(c, "parrilla_bloques", id);
+            b = repo.bloqueById(c, id); // releer con la parrilla bloqueada
+            String antes = repo.snapshotBloque(c, id);
 
             LocalTime inicio = (LocalTime) b.get("hora_inicio"), fin = (LocalTime) b.get("hora_fin");
             int programaId = ((Number) b.get("programa_id")).intValue();
@@ -191,10 +185,9 @@ public class ParrillaService {
             }
             fin = validarBloque(c, pa, id, programaId, inicio, fin, materialId, tipo);
             exigirSpotsCompatibles(c, id, tipo, inicio, fin);
-            Jdbc.exec(c, "UPDATE parrilla_bloques SET programa_id = ?, material_id = ?, hora_inicio = ?, hora_fin = ?, tipo = ? WHERE id = ?",
-                    programaId, materialId > 0 ? materialId : null, inicio, fin, tipo, id);
+            repo.updateBloque(c, id, programaId, materialId > 0 ? materialId : null, inicio, fin, tipo);
             renumerar(c, parrillaId);
-            auditoria.registrar(c, actor.id(), "BLOQUE_ACTUALIZAR", "parrilla_bloques", id, antes, Jdbc.json(c, "parrilla_bloques", id), Args.cmdText("UPDBLO", p));
+            auditoria.registrar(c, actor.id(), "BLOQUE_ACTUALIZAR", "parrilla_bloques", id, antes, repo.snapshotBloque(c, id), Args.cmdText("UPDBLO", p));
             subirVersion(c, actor, pa, Args.cmdText("UPDBLO", p));
             return "OK: bloque " + id + " actualizado (" + TextTable.fmt(inicio) + " - " + TextTable.fmt(fin) + ")";
         });
@@ -204,14 +197,14 @@ public class ParrillaService {
         Args.exact(p, 1, "DELBLO[bloque_id]");
         int id = InputValidator.validateId(p.get(0), "bloque_id");
         return Jdbc.tx(c -> {
-            Map<String, Object> b = Jdbc.one(c, "SELECT * FROM parrilla_bloques WHERE id = ?", id);
+            Map<String, Object> b = repo.bloqueById(c, id);
             if (b == null) throw new CommandException("Bloque no encontrado: " + id);
             int parrillaId = ((Number) b.get("parrilla_id")).intValue();
             Map<String, Object> pa = lockEditable(c, parrillaId);
-            if (Jdbc.count(c, "SELECT 1 FROM pauta_spots WHERE parrilla_bloque_id = ?", id) > 0)
+            if (repo.bloqueTieneSpots(c, id))
                 throw new CommandException("El bloque tiene spots de pauta; quitelos primero (DELSPO).");
-            String antes = Jdbc.json(c, "parrilla_bloques", id);
-            Jdbc.exec(c, "DELETE FROM parrilla_bloques WHERE id = ?", id);
+            String antes = repo.snapshotBloque(c, id);
+            repo.deleteBloque(c, id);
             renumerar(c, parrillaId);
             auditoria.registrar(c, actor.id(), "BLOQUE_ELIMINAR", "parrilla_bloques", id, antes, null, Args.cmdText("DELBLO", p));
             subirVersion(c, actor, pa, Args.cmdText("DELBLO", p));
@@ -225,7 +218,7 @@ public class ParrillaService {
         Args.exact(p, 1, "VALPAR[id]");
         int id = InputValidator.validateId(p.get(0), "id");
         return Jdbc.tx(c -> {
-            Map<String, Object> pa = Jdbc.one(c, "SELECT * FROM parrillas WHERE id = ?", id);
+            Map<String, Object> pa = repo.findById(c, id);
             if (pa == null) throw new CommandException("Parrilla no encontrada: " + id);
             Analisis a = analizar(c, id);
             StringBuilder sb = new StringBuilder("Validacion de la parrilla " + id + " (" + pa.get("fecha") + ", " + pa.get("estado") + "):\n");
@@ -243,9 +236,9 @@ public class ParrillaService {
             if (!"BORRADOR".equals(pa.get("estado"))) throw new CommandException("Solo se publican parrillas en BORRADOR (estado actual: " + pa.get("estado") + ").");
             Analisis a = analizar(c, id);
             if (!a.errores.isEmpty()) throw new CommandException("No se puede publicar la parrilla " + id + ":\n- " + String.join("\n- ", a.errores));
-            String antes = Jdbc.json(c, "parrillas", id);
-            Jdbc.exec(c, "UPDATE parrillas SET estado = 'PUBLICADA', publicada_at = now() WHERE id = ?", id);
-            auditoria.registrar(c, actor.id(), "PARRILLA_PUBLICAR", "parrillas", id, antes, Jdbc.json(c, "parrillas", id), Args.cmdText("PUBPAR", p));
+            String antes = repo.snapshot(c, id);
+            repo.publicar(c, id);
+            auditoria.registrar(c, actor.id(), "PARRILLA_PUBLICAR", "parrillas", id, antes, repo.snapshot(c, id), Args.cmdText("PUBPAR", p));
             return "OK: parrilla " + id + " PUBLICADA" + (a.huecos.isEmpty() ? "" : "\nALERTA: hay " + a.huecos.size() + " hueco(s) sin programacion (VALPAR[" + id + "]).");
         });
     }
@@ -256,22 +249,22 @@ public class ParrillaService {
         return Jdbc.tx(c -> {
             Map<String, Object> pa = lock(c, id);
             if (!"PUBLICADA".equals(pa.get("estado"))) throw new CommandException("Solo se cierran parrillas PUBLICADAS (estado actual: " + pa.get("estado") + ").");
-            String antes = Jdbc.json(c, "parrillas", id);
-            Jdbc.exec(c, "UPDATE parrillas SET estado = 'CERRADA' WHERE id = ?", id);
-            auditoria.registrar(c, actor.id(), "PARRILLA_CERRAR", "parrillas", id, antes, Jdbc.json(c, "parrillas", id), Args.cmdText("CERPAR", p));
+            String antes = repo.snapshot(c, id);
+            repo.cerrar(c, id);
+            auditoria.registrar(c, actor.id(), "PARRILLA_CERRAR", "parrillas", id, antes, repo.snapshot(c, id), Args.cmdText("CERPAR", p));
             return "OK: parrilla " + id + " CERRADA (solo lectura)";
         });
     }
 
     // ------------------------------------------------------------------ nucleo compartido
 
-    private static Map<String, Object> lock(Connection c, int id) throws SQLException {
-        Map<String, Object> pa = Jdbc.one(c, "SELECT * FROM parrillas WHERE id = ? FOR UPDATE", id);
+    private Map<String, Object> lock(Connection c, int id) throws SQLException {
+        Map<String, Object> pa = repo.findByIdForUpdate(c, id);
         if (pa == null) throw new CommandException("Parrilla no encontrada: " + id);
         return pa;
     }
 
-    private static Map<String, Object> lockEditable(Connection c, int id) throws SQLException {
+    private Map<String, Object> lockEditable(Connection c, int id) throws SQLException {
         Map<String, Object> pa = lock(c, id);
         if ("CERRADA".equals(pa.get("estado"))) throw new CommandException("La parrilla " + id + " esta CERRADA (solo lectura).");
         return pa;
@@ -281,24 +274,23 @@ public class ParrillaService {
     private void subirVersion(Connection c, Usuario actor, Map<String, Object> pa, String comando) throws SQLException {
         if (!"PUBLICADA".equals(pa.get("estado"))) return;
         int id = ((Number) pa.get("id")).intValue();
-        String antes = Jdbc.json(c, "parrillas", id);
-        Jdbc.exec(c, "UPDATE parrillas SET version = version + 1 WHERE id = ?", id);
-        auditoria.registrar(c, actor.id(), "PARRILLA_MODIFICADA", "parrillas", id, antes, Jdbc.json(c, "parrillas", id), comando);
+        String antes = repo.snapshot(c, id);
+        repo.subirVersion(c, id);
+        auditoria.registrar(c, actor.id(), "PARRILLA_MODIFICADA", "parrillas", id, antes, repo.snapshot(c, id), comando);
     }
 
     /** orden = posicion del bloque segun su hora de inicio. */
-    private static void renumerar(Connection c, int parrillaId) throws SQLException {
-        Jdbc.exec(c, "UPDATE parrilla_bloques b SET orden = s.rn FROM (SELECT id, row_number() OVER (ORDER BY hora_inicio, id) AS rn "
-                + "FROM parrilla_bloques WHERE parrilla_id = ?) s WHERE b.id = s.id", parrillaId);
+    private void renumerar(Connection c, int parrillaId) throws SQLException {
+        repo.renumerar(c, parrillaId);
     }
 
     /**
      * Valida un bloque (nuevo o editado) y devuelve su hora_fin definitiva.
      * excluirBloque = 0 para un bloque nuevo.
      */
-    private static LocalTime validarBloque(Connection c, Map<String, Object> pa, int excluirBloque, int programaId,
+    private LocalTime validarBloque(Connection c, Map<String, Object> pa, int excluirBloque, int programaId,
                                            LocalTime inicio, LocalTime fin, int materialId, String tipo) throws SQLException {
-        Map<String, Object> prog = Jdbc.one(c, "SELECT * FROM programas WHERE id = ? AND activo", programaId);
+        Map<String, Object> prog = repo.programaActivo(c, programaId);
         if (prog == null) throw new CommandException("programa_id no existe o esta inactivo: " + programaId);
         if (fin == null) {
             fin = inicio.plusMinutes(((Number) prog.get("duracion_min")).longValue());
@@ -313,7 +305,7 @@ public class ParrillaService {
         } else {
             boolean publicada = "PUBLICADA".equals(pa.get("estado"));
             if (materialId > 0) {
-                Map<String, Object> m = Jdbc.one(c, "SELECT * FROM materiales WHERE id = ? AND activo", materialId);
+                Map<String, Object> m = repo.materialActivo(c, materialId);
                 if (m == null) throw new CommandException("material_id no existe o esta de baja: " + materialId);
                 if ("spot".equals(m.get("tipo"))) throw new CommandException("Un spot solo puede ir en pautas (INSSPO), no en un bloque.");
                 if (publicada && !"VALIDADO".equals(m.get("estado")))
@@ -322,9 +314,7 @@ public class ParrillaService {
                 throw new CommandException("La parrilla esta PUBLICADA: el bloque requiere un material VALIDADO.");
             }
         }
-        List<Map<String, Object>> solapes = Jdbc.query(c,
-                "SELECT id, hora_inicio, hora_fin FROM parrilla_bloques WHERE parrilla_id = ? AND id <> ? AND hora_inicio < ? AND hora_fin > ?",
-                ((Number) pa.get("id")).intValue(), excluirBloque, fin, inicio);
+        List<Map<String, Object>> solapes = repo.solapes(c, ((Number) pa.get("id")).intValue(), excluirBloque, fin, inicio);
         if (!solapes.isEmpty()) {
             Map<String, Object> s = solapes.get(0);
             throw new CommandException("El bloque se solapa con el bloque " + s.get("id") + " (" + TextTable.fmt(s.get("hora_inicio"))
@@ -334,22 +324,18 @@ public class ParrillaService {
     }
 
     /** Un bloque con spots debe seguir siendo pausa comercial y contenerlos. */
-    private static void exigirSpotsCompatibles(Connection c, int bloqueId, String tipo, LocalTime inicio, LocalTime fin) throws SQLException {
-        if (Jdbc.count(c, "SELECT 1 FROM pauta_spots WHERE parrilla_bloque_id = ?", bloqueId) == 0) return;
+    private void exigirSpotsCompatibles(Connection c, int bloqueId, String tipo, LocalTime inicio, LocalTime fin) throws SQLException {
+        if (!repo.bloqueTieneSpots(c, bloqueId)) return;
         if (!tipo.equals("pausa_comercial")) throw new CommandException("El bloque tiene spots; debe seguir siendo pausa_comercial.");
-        long fuera = Jdbc.count(c, "SELECT count(*) FROM pauta_spots s JOIN materiales m ON m.id = s.material_id "
-                + "WHERE s.parrilla_bloque_id = ? AND (s.hora_programada < ? OR s.hora_programada + (m.duracion_seg * interval '1 second') > ?)",
-                bloqueId, inicio, fin);
+        long fuera = repo.spotsFueraDeHorario(c, bloqueId, inicio, fin);
         if (fuera > 0) throw new CommandException("Hay " + fuera + " spot(s) que quedarian fuera del nuevo horario del bloque.");
     }
 
     private record Analisis(List<String> errores, List<String> huecos) {}
 
-    private static Analisis analizar(Connection c, int parrillaId) throws SQLException {
+    private Analisis analizar(Connection c, int parrillaId) throws SQLException {
         List<String> errores = new ArrayList<>(), huecos = new ArrayList<>();
-        List<Map<String, Object>> bl = Jdbc.query(c,
-                "SELECT b.id, b.hora_inicio, b.hora_fin, b.tipo, b.material_id, m.estado AS mat_estado, m.activo AS mat_activo "
-              + "FROM parrilla_bloques b LEFT JOIN materiales m ON m.id = b.material_id WHERE b.parrilla_id = ? ORDER BY b.hora_inicio, b.id", parrillaId);
+        List<Map<String, Object>> bl = repo.bloquesParaAnalisis(c, parrillaId);
         if (bl.isEmpty()) {
             errores.add("la parrilla no tiene bloques");
             return new Analisis(errores, huecos);

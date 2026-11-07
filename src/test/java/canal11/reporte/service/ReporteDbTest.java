@@ -1,4 +1,4 @@
-package canal11.reporte;
+package canal11.reporte.service;
 
 import canal11.testutil.DbTestBase;
 import org.junit.jupiter.api.BeforeEach;

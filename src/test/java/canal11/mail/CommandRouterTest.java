@@ -1,6 +1,6 @@
 package canal11.mail;
 
-import canal11.emision.AuditoriaService;
+import canal11.emision.service.AuditoriaService;
 import canal11.model.Usuario;
 import canal11.util.CommandException;
 import org.junit.jupiter.api.BeforeEach;

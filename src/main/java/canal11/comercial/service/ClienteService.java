@@ -1,7 +1,8 @@
-package canal11.comercial;
+package canal11.comercial.service;
 
 import canal11.db.Jdbc;
-import canal11.emision.AuditoriaService;
+import canal11.comercial.repository.ClienteRepository;
+import canal11.emision.service.AuditoriaService;
 import canal11.mail.CommandRouter;
 import canal11.mail.CommandSpec;
 import canal11.model.Usuario;
@@ -22,6 +23,7 @@ public class ClienteService {
     private static final String[] COLS = {"id", "razon_social", "nit", "contacto", "email", "telefono", "activo"};
 
     private final AuditoriaService auditoria;
+    private final ClienteRepository repo = new ClienteRepository();
 
     public ClienteService(AuditoriaService auditoria) {
         this.auditoria = auditoria;
@@ -45,10 +47,9 @@ public class ClienteService {
         String email = p.get(3).isBlank() ? null : InputValidator.validateEmail(p.get(3), "email");
         String tel = telefono(p.get(4));
         return Jdbc.tx(c -> {
-            if (Jdbc.count(c, "SELECT 1 FROM clientes WHERE nit = ?", nit) > 0) throw new CommandException("Ya existe un cliente con ese NIT.");
-            int id = Jdbc.insert(c, "INSERT INTO clientes (razon_social, nit, contacto, email, telefono) VALUES (?,?,?,?,?) RETURNING id",
-                    rs, nit, contacto, email, tel);
-            auditoria.registrar(c, actor.id(), "CLIENTE_CREAR", "clientes", id, null, Jdbc.json(c, "clientes", id), Args.cmdText("INSCLI", p));
+            if (repo.existeNit(c, nit, null)) throw new CommandException("Ya existe un cliente con ese NIT.");
+            int id = repo.insert(c, rs, nit, contacto, email, tel);
+            auditoria.registrar(c, actor.id(), "CLIENTE_CREAR", "clientes", id, null, repo.snapshot(c, id), Args.cmdText("INSCLI", p));
             return "OK: cliente creado con ID " + id;
         });
     }
@@ -56,7 +57,7 @@ public class ClienteService {
     String list(Usuario actor, List<String> p) {
         Args.exact(p, 1, "LISCLI[\"*\"]");
         return Jdbc.tx(c -> {
-            List<Map<String, Object>> rows = Jdbc.query(c, "SELECT * FROM clientes ORDER BY id");
+            List<Map<String, Object>> rows = repo.list(c);
             return "Listando clientes (" + rows.size() + "):\n" + TextTable.render(rows, COLS);
         });
     }
@@ -65,7 +66,7 @@ public class ClienteService {
         Args.exact(p, 1, "GETCLI[id]");
         int id = InputValidator.validateId(p.get(0), "id");
         return Jdbc.tx(c -> {
-            Map<String, Object> r = Jdbc.one(c, "SELECT * FROM clientes WHERE id = ?", id);
+            Map<String, Object> r = repo.findById(c, id);
             if (r == null) throw new CommandException("Cliente no encontrado: " + id);
             return TextTable.detail(r, COLS);
         });
@@ -77,8 +78,8 @@ public class ClienteService {
         int id = InputValidator.validateId(p.get(0), "id");
         Map<String, String> f = Args.fields(p, 1, CAMPOS, usage);
         return Jdbc.tx(c -> {
-            if (Jdbc.one(c, "SELECT id FROM clientes WHERE id = ? FOR UPDATE", id) == null) throw new CommandException("Cliente no encontrado: " + id);
-            String antes = Jdbc.json(c, "clientes", id);
+            if (repo.findByIdForUpdate(c, id) == null) throw new CommandException("Cliente no encontrado: " + id);
+            String antes = repo.snapshot(c, id);
             List<String> sets = new ArrayList<>();
             List<Object> vals = new ArrayList<>();
             for (Map.Entry<String, String> e : f.entrySet()) {
@@ -88,7 +89,7 @@ public class ClienteService {
                     case "razon_social" -> val = InputValidator.validateText(v, "razon_social", 160);
                     case "nit" -> {
                         String n = nit(v);
-                        if (Jdbc.count(c, "SELECT 1 FROM clientes WHERE nit = ? AND id <> ?", n, id) > 0) throw new CommandException("Ya existe un cliente con ese NIT.");
+                        if (repo.existeNit(c, n, id)) throw new CommandException("Ya existe un cliente con ese NIT.");
                         val = n;
                     }
                     case "contacto" -> val = opt(v, 120, "contacto");
@@ -103,9 +104,8 @@ public class ClienteService {
                 sets.add(e.getKey() + " = ?");
                 vals.add(val);
             }
-            vals.add(id);
-            Jdbc.exec(c, "UPDATE clientes SET " + String.join(", ", sets) + " WHERE id = ?", vals.toArray());
-            auditoria.registrar(c, actor.id(), "CLIENTE_ACTUALIZAR", "clientes", id, antes, Jdbc.json(c, "clientes", id), Args.cmdText("UPDCLI", p));
+            repo.update(c, id, sets, vals);
+            auditoria.registrar(c, actor.id(), "CLIENTE_ACTUALIZAR", "clientes", id, antes, repo.snapshot(c, id), Args.cmdText("UPDCLI", p));
             return "OK: cliente " + id + " actualizado";
         });
     }
@@ -114,19 +114,19 @@ public class ClienteService {
         Args.exact(p, 1, "DELCLI[id]");
         int id = InputValidator.validateId(p.get(0), "id");
         return Jdbc.tx(c -> {
-            Map<String, Object> cur = Jdbc.one(c, "SELECT * FROM clientes WHERE id = ? FOR UPDATE", id);
+            Map<String, Object> cur = repo.findByIdForUpdate(c, id);
             if (cur == null) throw new CommandException("Cliente no encontrado: " + id);
             if (!(Boolean) cur.get("activo")) return "OK: el cliente " + id + " ya estaba desactivado";
             exigirSinPautasActivas(c, id);
-            String antes = Jdbc.json(c, "clientes", id);
-            Jdbc.exec(c, "UPDATE clientes SET activo = FALSE WHERE id = ?", id);
-            auditoria.registrar(c, actor.id(), "CLIENTE_DESACTIVAR", "clientes", id, antes, Jdbc.json(c, "clientes", id), Args.cmdText("DELCLI", p));
+            String antes = repo.snapshot(c, id);
+            repo.desactivar(c, id);
+            auditoria.registrar(c, actor.id(), "CLIENTE_DESACTIVAR", "clientes", id, antes, repo.snapshot(c, id), Args.cmdText("DELCLI", p));
             return "OK: cliente " + id + " desactivado";
         });
     }
 
-    private static void exigirSinPautasActivas(java.sql.Connection c, int id) throws java.sql.SQLException {
-        if (Jdbc.count(c, "SELECT 1 FROM pautas WHERE cliente_id = ? AND estado = 'ACTIVA'", id) > 0)
+    private void exigirSinPautasActivas(java.sql.Connection c, int id) throws java.sql.SQLException {
+        if (repo.tienePautasActivas(c, id))
             throw new CommandException("El cliente tiene pautas ACTIVAS; finalicelas o pausela primero.");
     }
 

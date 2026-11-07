@@ -1,7 +1,8 @@
-package canal11.gestion;
+package canal11.gestion.service;
 
 import canal11.db.Jdbc;
-import canal11.emision.AuditoriaService;
+import canal11.emision.service.AuditoriaService;
+import canal11.gestion.repository.MaterialRepository;
 import canal11.mail.CommandRouter;
 import canal11.mail.CommandSpec;
 import canal11.model.Usuario;
@@ -36,6 +37,7 @@ public class MaterialService {
             "estado", "programa_id", "validado_por", "validado_at", "observaciones", "registrado_por", "activo"};
 
     private final AuditoriaService auditoria;
+    private final MaterialRepository repo = new MaterialRepository();
 
     public MaterialService(AuditoriaService auditoria) {
         this.auditoria = auditoria;
@@ -64,9 +66,8 @@ public class MaterialService {
         return Jdbc.tx(c -> {
             if (programaId > 0) exigirPrograma(c, programaId);
             exigirHashLibre(c, hash, 0);
-            int id = Jdbc.insert(c, "INSERT INTO materiales (programa_id, titulo, tipo, duracion_seg, formato, ruta_archivo, hash_sha256, registrado_por) "
-                    + "VALUES (?,?,?,?,?,?,?,?) RETURNING id", programaId > 0 ? programaId : null, titulo, tipo, dur, formato, ruta, hash, actor.id());
-            auditoria.registrar(c, actor.id(), "MATERIAL_CREAR", "materiales", id, null, Jdbc.json(c, "materiales", id), Args.cmdText("INSMAT", p));
+            int id = repo.insert(c, programaId > 0 ? programaId : null, titulo, tipo, dur, formato, ruta, hash, actor.id());
+            auditoria.registrar(c, actor.id(), "MATERIAL_CREAR", "materiales", id, null, repo.snapshot(c, id), Args.cmdText("INSMAT", p));
             return "OK: material registrado con ID " + id + " (estado PENDIENTE)";
         });
     }
@@ -75,13 +76,12 @@ public class MaterialService {
         Args.exact(p, 1, "LISMAT[\"*\"] | LISMAT[\"estado\"] | LISMAT[\"tipo\"]");
         return Jdbc.tx(c -> {
             List<Map<String, Object>> rows;
-            String base = "SELECT id, titulo, tipo, duracion_seg, formato, estado, programa_id, activo FROM materiales WHERE activo";
             if (Args.isAll(p)) {
-                rows = Jdbc.query(c, base + " ORDER BY id");
+                rows = repo.listActivos(c);
             } else if (ESTADOS.contains(p.get(0).trim().toUpperCase())) {
-                rows = Jdbc.query(c, base + " AND estado = ? ORDER BY id", p.get(0).trim().toUpperCase());
+                rows = repo.listByEstado(c, p.get(0).trim().toUpperCase());
             } else {
-                rows = Jdbc.query(c, base + " AND tipo = ? ORDER BY id", InputValidator.validateEnum(p.get(0), "estado o tipo", TIPOS));
+                rows = repo.listByTipo(c, InputValidator.validateEnum(p.get(0), "estado o tipo", TIPOS));
             }
             return "Listando materiales (" + rows.size() + "):\n" + TextTable.render(rows, COLS);
         });
@@ -91,7 +91,7 @@ public class MaterialService {
         Args.exact(p, 1, "GETMAT[id]");
         int id = InputValidator.validateId(p.get(0), "id");
         return Jdbc.tx(c -> {
-            Map<String, Object> r = Jdbc.one(c, "SELECT * FROM materiales WHERE id = ?", id);
+            Map<String, Object> r = repo.findById(c, id);
             if (r == null) throw new CommandException("Material no encontrado: " + id);
             return TextTable.detail(r, DET);
         });
@@ -103,9 +103,9 @@ public class MaterialService {
         int id = InputValidator.validateId(p.get(0), "id");
         Map<String, String> f = Args.fields(p, 1, CAMPOS, usage);
         return Jdbc.tx(c -> {
-            Map<String, Object> cur = Jdbc.one(c, "SELECT * FROM materiales WHERE id = ? FOR UPDATE", id);
+            Map<String, Object> cur = repo.findByIdForUpdate(c, id);
             if (cur == null) throw new CommandException("Material no encontrado: " + id);
-            String antes = Jdbc.json(c, "materiales", id);
+            String antes = repo.snapshot(c, id);
             List<String> sets = new ArrayList<>();
             List<Object> vals = new ArrayList<>();
             boolean tecnico = false; // cambios que invalidan una validacion previa
@@ -122,9 +122,9 @@ public class MaterialService {
                     }
                     case "tipo" -> {
                         String t = InputValidator.validateEnum(v, "tipo", TIPOS);
-                        if (t.equals("spot") && Jdbc.count(c, "SELECT 1 FROM parrilla_bloques WHERE material_id = ?", id) > 0)
+                        if (t.equals("spot") && repo.enBloques(c, id))
                             throw new CommandException("El material esta en bloques de parrilla; no puede ser spot.");
-                        if (!t.equals("spot") && Jdbc.count(c, "SELECT 1 FROM pauta_spots WHERE material_id = ?", id) > 0)
+                        if (!t.equals("spot") && repo.enSpots(c, id))
                             throw new CommandException("El material esta en pautas como spot; no puede cambiar de tipo.");
                         add(sets, vals, "tipo", t);
                         tecnico = true;
@@ -145,9 +145,8 @@ public class MaterialService {
                 sets.add("validado_por = NULL");
                 sets.add("validado_at = NULL");
             }
-            vals.add(id);
-            Jdbc.exec(c, "UPDATE materiales SET " + String.join(", ", sets) + " WHERE id = ?", vals.toArray());
-            auditoria.registrar(c, actor.id(), "MATERIAL_ACTUALIZAR", "materiales", id, antes, Jdbc.json(c, "materiales", id), Args.cmdText("UPDMAT", p));
+            repo.update(c, id, sets, vals);
+            auditoria.registrar(c, actor.id(), "MATERIAL_ACTUALIZAR", "materiales", id, antes, repo.snapshot(c, id), Args.cmdText("UPDMAT", p));
             return "OK: material " + id + " actualizado" + (tecnico && !"PENDIENTE".equals(cur.get("estado")) ? " (vuelve a PENDIENTE de validacion)" : "");
         });
     }
@@ -156,17 +155,16 @@ public class MaterialService {
         Args.exact(p, 1, "DELMAT[id]");
         int id = InputValidator.validateId(p.get(0), "id");
         return Jdbc.tx(c -> {
-            Map<String, Object> cur = Jdbc.one(c, "SELECT * FROM materiales WHERE id = ? FOR UPDATE", id);
+            Map<String, Object> cur = repo.findByIdForUpdate(c, id);
             if (cur == null) throw new CommandException("Material no encontrado: " + id);
             if (!(Boolean) cur.get("activo")) return "OK: el material " + id + " ya estaba dado de baja";
-            if (Jdbc.count(c, "SELECT count(*) FROM parrilla_bloques b JOIN parrillas pa ON pa.id = b.parrilla_id "
-                    + "WHERE b.material_id = ? AND pa.estado IN ('BORRADOR','PUBLICADA')", id) > 0)
+            if (repo.enParrillaVigente(c, id))
                 throw new CommandException("El material esta en una parrilla borrador/publicada; quitelo primero.");
-            if (Jdbc.count(c, "SELECT 1 FROM pauta_spots WHERE material_id = ? AND estado = 'PROGRAMADO'", id) > 0)
+            if (repo.tieneSpotsProgramados(c, id))
                 throw new CommandException("El material tiene spots programados; quitelos primero.");
-            String antes = Jdbc.json(c, "materiales", id);
-            Jdbc.exec(c, "UPDATE materiales SET activo = FALSE WHERE id = ?", id);
-            auditoria.registrar(c, actor.id(), "MATERIAL_BAJA", "materiales", id, antes, Jdbc.json(c, "materiales", id), Args.cmdText("DELMAT", p));
+            String antes = repo.snapshot(c, id);
+            repo.darDeBaja(c, id);
+            auditoria.registrar(c, actor.id(), "MATERIAL_BAJA", "materiales", id, antes, repo.snapshot(c, id), Args.cmdText("DELMAT", p));
             return "OK: material " + id + " dado de baja";
         });
     }
@@ -191,13 +189,13 @@ public class MaterialService {
         }
     }
 
-    private static void exigirHashLibre(Connection c, String hash, int exceptId) throws SQLException {
-        Map<String, Object> dup = Jdbc.one(c, "SELECT id FROM materiales WHERE hash_sha256 = ? AND id <> ?", hash, exceptId);
-        if (dup != null) throw new CommandException("material duplicado, ya registrado como ID " + dup.get("id"));
+    private void exigirHashLibre(Connection c, String hash, int exceptId) throws SQLException {
+        Object dupId = repo.idConHash(c, hash, exceptId);
+        if (dupId != null) throw new CommandException("material duplicado, ya registrado como ID " + dupId);
     }
 
-    private static void exigirPrograma(Connection c, int id) throws SQLException {
-        if (Jdbc.count(c, "SELECT 1 FROM programas WHERE id = ? AND activo", id) == 0)
+    private void exigirPrograma(Connection c, int id) throws SQLException {
+        if (!repo.programaActivoExiste(c, id))
             throw new CommandException("programa_id no existe o esta inactivo: " + id);
     }
 

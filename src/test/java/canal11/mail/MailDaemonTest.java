@@ -1,6 +1,6 @@
 package canal11.mail;
 
-import canal11.emision.AuditoriaService;
+import canal11.emision.service.AuditoriaService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

@@ -1,8 +1,9 @@
-package canal11.gestion;
+package canal11.gestion.service;
 
 import canal11.db.DbConfig;
 import canal11.db.Jdbc;
-import canal11.emision.AuditoriaService;
+import canal11.emision.service.AuditoriaService;
+import canal11.gestion.repository.ValidacionRepository;
 import canal11.mail.CommandRouter;
 import canal11.mail.CommandSpec;
 import canal11.model.Usuario;
@@ -26,6 +27,7 @@ import java.util.Map;
 public class ValidacionService {
 
     private final AuditoriaService auditoria;
+    private final ValidacionRepository repo = new ValidacionRepository();
 
     public ValidacionService(AuditoriaService auditoria) {
         this.auditoria = auditoria;
@@ -49,7 +51,7 @@ public class ValidacionService {
         int id = InputValidator.validateId(p.get(0), "id");
         String obs = p.size() > 1 && !p.get(1).isBlank() ? p.get(1).trim() : null;
         return Jdbc.tx(c -> {
-            Map<String, Object> m = Jdbc.one(c, "SELECT * FROM materiales WHERE id = ? AND activo FOR UPDATE", id);
+            Map<String, Object> m = repo.materialActivoForUpdate(c, id);
             if (m == null) throw new CommandException("Material no encontrado: " + id);
             String estado = (String) m.get("estado");
             if (estado.equals("VALIDADO")) throw new CommandException("El material ya esta VALIDADO.");
@@ -70,10 +72,7 @@ public class ValidacionService {
                 }
             }
             int dur = ((Number) m.get("duracion_seg")).intValue();
-            for (Map<String, Object> b : Jdbc.query(c,
-                    "SELECT pa.fecha, b.hora_inicio, EXTRACT(EPOCH FROM (b.hora_fin - b.hora_inicio))::int AS seg "
-                  + "FROM parrilla_bloques b JOIN parrillas pa ON pa.id = b.parrilla_id "
-                  + "WHERE b.material_id = ? AND pa.estado IN ('BORRADOR','PUBLICADA') AND pa.fecha >= CURRENT_DATE", id)) {
+            for (Map<String, Object> b : repo.bloquesVigentesDeMaterial(c, id)) {
                 int seg = ((Number) b.get("seg")).intValue();
                 if (Math.abs(seg - dur) > tolerancia()) {
                     fallos.add("la duracion (" + dur + " s) no coincide con el bloque del " + b.get("fecha") + " "
@@ -82,10 +81,9 @@ public class ValidacionService {
             }
             if (!fallos.isEmpty()) throw new CommandException("No se puede validar el material " + id + ":\n- " + String.join("\n- ", fallos));
 
-            String antes = Jdbc.json(c, "materiales", id);
-            Jdbc.exec(c, "UPDATE materiales SET estado = 'VALIDADO', validado_por = ?, validado_at = now(), observaciones = COALESCE(?, observaciones) WHERE id = ?",
-                    actor.id(), obs, id);
-            auditoria.registrar(c, actor.id(), "MATERIAL_VALIDAR", "materiales", id, antes, Jdbc.json(c, "materiales", id), Args.cmdText("VALMAT", p));
+            String antes = repo.snapshotMaterial(c, id);
+            repo.marcarValidado(c, id, actor.id(), obs);
+            auditoria.registrar(c, actor.id(), "MATERIAL_VALIDAR", "materiales", id, antes, repo.snapshotMaterial(c, id), Args.cmdText("VALMAT", p));
             return "OK: material " + id + " VALIDADO por " + actor.email();
         });
     }
@@ -95,15 +93,13 @@ public class ValidacionService {
         int id = InputValidator.validateId(p.get(0), "id");
         String motivo = InputValidator.validateText(p.get(1), "motivo", 500);
         return Jdbc.tx(c -> {
-            Map<String, Object> m = Jdbc.one(c, "SELECT * FROM materiales WHERE id = ? AND activo FOR UPDATE", id);
+            Map<String, Object> m = repo.materialActivoForUpdate(c, id);
             if (m == null) throw new CommandException("Material no encontrado: " + id);
             if (m.get("estado").equals("RECHAZADO")) throw new CommandException("El material ya esta RECHAZADO.");
-            String antes = Jdbc.json(c, "materiales", id);
-            Jdbc.exec(c, "UPDATE materiales SET estado = 'RECHAZADO', validado_por = ?, validado_at = now(), observaciones = ? WHERE id = ?",
-                    actor.id(), motivo, id);
-            auditoria.registrar(c, actor.id(), "MATERIAL_RECHAZAR", "materiales", id, antes, Jdbc.json(c, "materiales", id), Args.cmdText("RECMAT", p));
-            long enPublicadas = Jdbc.count(c, "SELECT count(*) FROM parrilla_bloques b JOIN parrillas pa ON pa.id = b.parrilla_id "
-                    + "WHERE b.material_id = ? AND pa.estado = 'PUBLICADA'", id);
+            String antes = repo.snapshotMaterial(c, id);
+            repo.marcarRechazado(c, id, actor.id(), motivo);
+            auditoria.registrar(c, actor.id(), "MATERIAL_RECHAZAR", "materiales", id, antes, repo.snapshotMaterial(c, id), Args.cmdText("RECMAT", p));
+            long enPublicadas = repo.bloquesEnPublicadas(c, id);
             return "OK: material " + id + " RECHAZADO" + (enPublicadas > 0
                     ? "\nALERTA: esta en " + enPublicadas + " bloque(s) de parrillas PUBLICADAS; reemplacelo con UPDBLO." : "");
         });
@@ -113,15 +109,10 @@ public class ValidacionService {
         Args.exact(p, 1, "ESTEMI[parrilla_id]");
         int id = InputValidator.validateId(p.get(0), "parrilla_id");
         return Jdbc.tx(c -> {
-            Map<String, Object> pa = Jdbc.one(c, "SELECT * FROM parrillas WHERE id = ?", id);
+            Map<String, Object> pa = repo.parrillaById(c, id);
             if (pa == null) throw new CommandException("Parrilla no encontrada: " + id);
             boolean publicada = "PUBLICADA".equals(pa.get("estado"));
-            List<Map<String, Object>> bloques = Jdbc.query(c,
-                    "SELECT b.id, b.hora_inicio, b.hora_fin, b.tipo, pr.nombre AS programa, m.id AS material_id, m.estado AS mat_estado, "
-                  + "(SELECT count(*) FROM pauta_spots s JOIN materiales ms ON ms.id = s.material_id "
-                  + "   WHERE s.parrilla_bloque_id = b.id AND ms.estado <> 'VALIDADO') AS spots_pend "
-                  + "FROM parrilla_bloques b JOIN programas pr ON pr.id = b.programa_id LEFT JOIN materiales m ON m.id = b.material_id "
-                  + "WHERE b.parrilla_id = ? ORDER BY b.hora_inicio", id);
+            List<Map<String, Object>> bloques = repo.bloquesConEstadoMaterial(c, id);
             int listos = 0;
             List<Map<String, Object>> rows = new ArrayList<>();
             for (Map<String, Object> b : bloques) {

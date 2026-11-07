@@ -1,16 +1,16 @@
 package canal11.mail;
 
-import canal11.emision.AuditoriaService;
-import canal11.gestion.UsuarioRepository;
-import canal11.comercial.ClienteService;
-import canal11.comercial.PautaService;
-import canal11.emision.EmisionService;
-import canal11.gestion.MaterialService;
-import canal11.reporte.ReporteService;
-import canal11.gestion.ProgramaService;
-import canal11.gestion.ValidacionService;
-import canal11.programacion.ParrillaService;
-import canal11.gestion.UsuarioService;
+import canal11.emision.service.AuditoriaService;
+import canal11.gestion.repository.UsuarioRepository;
+import canal11.comercial.service.ClienteService;
+import canal11.comercial.service.PautaService;
+import canal11.emision.service.EmisionService;
+import canal11.gestion.service.MaterialService;
+import canal11.reporte.service.ReporteService;
+import canal11.gestion.service.ProgramaService;
+import canal11.gestion.service.ValidacionService;
+import canal11.programacion.service.ParrillaService;
+import canal11.gestion.service.UsuarioService;
 
 /**
  * Punto unico de cableado de la aplicacion real. Cada fase agrega aqui el registro de sus comandos

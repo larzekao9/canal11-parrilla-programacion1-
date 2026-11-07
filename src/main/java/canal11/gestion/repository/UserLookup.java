@@ -1,4 +1,4 @@
-package canal11.gestion;
+package canal11.gestion.repository;
 
 import canal11.model.Usuario;
 

@@ -1,4 +1,4 @@
-package canal11.comercial;
+package canal11.comercial.service;
 
 import canal11.testutil.DbTestBase;
 import org.junit.jupiter.api.BeforeEach;

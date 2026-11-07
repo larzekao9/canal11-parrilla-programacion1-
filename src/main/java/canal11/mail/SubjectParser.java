@@ -15,22 +15,26 @@ public final class SubjectParser {
 
     private static final Pattern FORMA = Pattern.compile("^\\s*[A-Za-z]{2,12}\\s*\\[.*\\]\\s*$", Pattern.DOTALL);
 
+    /** Atajo para usuarios humanos: el asunto "help" (sin corchetes) equivale a HELP[]. */
+    private static final Pattern AYUDA_SIMPLE = Pattern.compile("^\\s*help\\s*$", Pattern.CASE_INSENSITIVE);
+
     private SubjectParser() {}
 
     public static boolean esValido(String subject) {
-        return subject != null && FORMA.matcher(subject).matches();
+        return subject != null && (FORMA.matcher(subject).matches() || AYUDA_SIMPLE.matcher(subject).matches());
     }
 
     /** Devuelve el comando en mayusculas, o "" si el subject no tiene la forma COMANDO[...]. */
     public static String extraerComando(String subject) {
         if (!esValido(subject)) return "";
+        if (AYUDA_SIMPLE.matcher(subject).matches()) return "HELP";
         return subject.substring(0, subject.indexOf('[')).trim().toUpperCase();
     }
 
     /** Devuelve la lista de parametros. Subject invalido => lista vacia. */
     public static List<String> extraerParametros(String subject) {
         List<String> out = new ArrayList<>();
-        if (!esValido(subject)) return out;
+        if (!esValido(subject) || AYUDA_SIMPLE.matcher(subject).matches()) return out;
         String inner = subject.substring(subject.indexOf('[') + 1, subject.lastIndexOf(']')).trim();
         if (inner.isEmpty()) return out;
         if (inner.equals("*")) {

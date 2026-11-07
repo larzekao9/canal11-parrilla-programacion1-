@@ -1,9 +1,10 @@
-package canal11.gestion;
+package canal11.gestion.service;
 
 import canal11.db.DbConfig;
 import canal11.db.DbConnection;
 import canal11.db.SchemaInitializer;
-import canal11.emision.AuditoriaService;
+import canal11.emision.service.AuditoriaService;
+import canal11.gestion.repository.UsuarioRepository;
 import canal11.mail.CommandRouter;
 import canal11.mail.InMemorySessionStore;
 import org.junit.jupiter.api.Assumptions;

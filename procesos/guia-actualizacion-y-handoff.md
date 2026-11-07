@@ -17,7 +17,7 @@ CONTEXTO CLAVE (RESUMEN)
 ARQUITECTURA (IGUAL A SERVICARGO)
 - Correo (Subject) -> MailDaemon -> CommandRouter (roles, AUTH) -> Service (validaciones y reglas) -> Repository (JDBC) -> PostgreSQL
   -> respuesta en texto -> SmtpClient.
-- Paquetes: canal11.{db, mail, model, gestion, programacion, comercial, emision, reporte, util}. Detalle en plan-cu0-base-correo.md.
+- Paquetes: canal11.{db, mail, model, gestion, programacion, comercial, emision, reporte, util}; cada modulo de negocio se divide en service/ y repository/. Detalle en plan-cu0-base-correo.md.
 - Esquema y seed: SchemaInitializer (se ejecuta con App.java). Configuracion: DbConfig / MailConfig (variables de entorno o config.properties local).
 
 ORDEN RECOMENDADO DE IMPLEMENTACION

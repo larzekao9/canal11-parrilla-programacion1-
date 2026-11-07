@@ -1,8 +1,9 @@
-package canal11.reporte;
+package canal11.reporte.service;
 
 import canal11.db.Jdbc;
-import canal11.emision.AuditoriaService;
-import canal11.emision.EmisionService;
+import canal11.emision.service.AuditoriaService;
+import canal11.reporte.repository.ReporteRepository;
+import canal11.emision.service.EmisionService;
 import canal11.mail.CommandRouter;
 import canal11.mail.CommandSpec;
 import canal11.model.Usuario;
@@ -26,6 +27,7 @@ public class ReporteService {
     static final int MAX_DIAS = 366;
 
     private final AuditoriaService auditoria;
+    private final ReporteRepository repo = new ReporteRepository();
 
     public ReporteService(AuditoriaService auditoria) {
         this.auditoria = auditoria;
@@ -64,14 +66,8 @@ public class ReporteService {
     String programacion(Usuario u, List<String> p) {
         Rango r = rango(p, 2, "REPPRO[\"desde\",\"hasta\"]");
         return Jdbc.tx(c -> {
-            List<Map<String, Object>> porTipo = Jdbc.query(c,
-                    "SELECT pr.tipo, count(*) AS bloques, round(sum(EXTRACT(EPOCH FROM (b.hora_fin - b.hora_inicio))) / 3600.0, 2) AS horas "
-                  + "FROM parrilla_bloques b JOIN parrillas pa ON pa.id = b.parrilla_id JOIN programas pr ON pr.id = b.programa_id "
-                  + "WHERE pa.fecha BETWEEN ? AND ? GROUP BY pr.tipo ORDER BY horas DESC", r.desde, r.hasta);
-            List<Map<String, Object>> porDia = Jdbc.query(c,
-                    "SELECT pa.fecha, pa.estado, count(b.id) AS bloques, COALESCE(round(sum(EXTRACT(EPOCH FROM (b.hora_fin - b.hora_inicio))) / 3600.0, 2), 0) AS horas "
-                  + "FROM parrillas pa LEFT JOIN parrilla_bloques b ON b.parrilla_id = pa.id WHERE pa.fecha BETWEEN ? AND ? "
-                  + "GROUP BY pa.id, pa.fecha, pa.estado ORDER BY pa.fecha", r.desde, r.hasta);
+            List<Map<String, Object>> porTipo = repo.horasPorTipo(c, r.desde, r.hasta);
+            List<Map<String, Object>> porDia = repo.horasPorDia(c, r.desde, r.hasta);
             auditar(c, u, "REPPRO", p);
             if (porDia.isEmpty()) return cab("Reporte de programacion", r) + "(sin parrillas en el rango)";
             return cab("Reporte de programacion", r) + "Horas por tipo de programa:\n" + TextTable.render(porTipo, "tipo", "bloques", "horas")
@@ -84,12 +80,8 @@ public class ReporteService {
         return Jdbc.tx(c -> {
             var desde = r.desde.atStartOfDay();
             var hasta = r.hasta.plusDays(1).atStartOfDay();
-            List<Map<String, Object>> resumen = Jdbc.query(c,
-                    "SELECT estado, tipo, count(*) AS cantidad, round(sum(duracion_seg) / 60.0, 1) AS minutos FROM materiales "
-                  + "WHERE activo AND registrado_at >= ? AND registrado_at < ? GROUP BY estado, tipo ORDER BY estado, tipo", desde, hasta);
-            List<Map<String, Object>> pend = Jdbc.query(c,
-                    "SELECT id, titulo, tipo, duracion_seg, registrado_at FROM materiales WHERE activo AND estado = 'PENDIENTE' "
-                  + "AND registrado_at >= ? AND registrado_at < ? ORDER BY registrado_at LIMIT 50", desde, hasta);
+            List<Map<String, Object>> resumen = repo.materialesPorEstadoTipo(c, desde, hasta);
+            List<Map<String, Object>> pend = repo.materialesPendientes(c, desde, hasta);
             auditar(c, u, "REPCON", p);
             if (resumen.isEmpty()) return cab("Reporte de contenidos", r) + "(sin materiales registrados en el rango)";
             return cab("Reporte de contenidos", r) + TextTable.render(resumen, "estado", "tipo", "cantidad", "minutos")
@@ -101,22 +93,8 @@ public class ReporteService {
         Rango r = rango(p, 3, "REPPAU[\"desde\",\"hasta\"(,cliente_id)]");
         Integer clienteId = p.size() == 3 ? InputValidator.validateId(p.get(2), "cliente_id") : null;
         return Jdbc.tx(c -> {
-            List<Object> params = new ArrayList<>(List.of(r.desde, r.hasta));
-            String filtro = "";
-            if (clienteId != null) {
-                if (Jdbc.count(c, "SELECT 1 FROM clientes WHERE id = ?", clienteId) == 0) throw new CommandException("Cliente no encontrado: " + clienteId);
-                filtro = " AND cl.id = ?";
-                params.add(clienteId);
-            }
-            List<Map<String, Object>> rows = Jdbc.query(c,
-                    "SELECT cl.razon_social AS cliente, count(*) AS spots, "
-                  + "count(*) FILTER (WHERE s.estado = 'PROGRAMADO') AS programados, "
-                  + "count(*) FILTER (WHERE s.estado = 'EMITIDO') AS emitidos, "
-                  + "count(*) FILTER (WHERE s.estado = 'NO_EMITIDO') AS no_emitidos, "
-                  + "COALESCE(sum(pt.tarifa_spot) FILTER (WHERE s.estado = 'EMITIDO'), 0) AS monto "
-                  + "FROM pauta_spots s JOIN pautas pt ON pt.id = s.pauta_id JOIN clientes cl ON cl.id = pt.cliente_id "
-                  + "JOIN parrilla_bloques b ON b.id = s.parrilla_bloque_id JOIN parrillas pa ON pa.id = b.parrilla_id "
-                  + "WHERE pa.fecha BETWEEN ? AND ?" + filtro + " GROUP BY cl.id, cl.razon_social ORDER BY cl.razon_social", params.toArray());
+            if (clienteId != null && !repo.clienteExiste(c, clienteId)) throw new CommandException("Cliente no encontrado: " + clienteId);
+            List<Map<String, Object>> rows = repo.pautaPorCliente(c, r.desde, r.hasta, clienteId);
             auditar(c, u, "REPPAU", p);
             if (rows.isEmpty()) return cab("Reporte de pauta publicitaria", r) + "(sin spots en el rango)";
             return cab("Reporte de pauta publicitaria", r) + TextTable.render(rows, "cliente", "spots", "programados", "emitidos", "no_emitidos", "monto")
@@ -127,8 +105,7 @@ public class ReporteService {
     String cumplimiento(Usuario u, List<String> p) {
         Rango r = rango(p, 2, "REPCUM[\"desde\",\"hasta\"]");
         return Jdbc.tx(c -> {
-            List<Map<String, Object>> parrillas = Jdbc.query(c,
-                    "SELECT id, fecha, estado FROM parrillas WHERE fecha BETWEEN ? AND ? AND estado IN ('PUBLICADA','CERRADA') ORDER BY fecha", r.desde, r.hasta);
+            List<Map<String, Object>> parrillas = repo.parrillasPublicadasOCerradas(c, r.desde, r.hasta);
             List<Map<String, Object>> rows = new ArrayList<>();
             long tot = 0, emi = 0;
             for (Map<String, Object> pa : parrillas) {
@@ -157,12 +134,8 @@ public class ReporteService {
         return Jdbc.tx(c -> {
             var desde = r.desde.atStartOfDay();
             var hasta = r.hasta.plusDays(1).atStartOfDay();
-            List<Map<String, Object>> rows = Jdbc.query(c,
-                    "SELECT COALESCE(x.email, '(sistema)') AS usuario, count(*) AS acciones, min(a.created_at) AS primera, max(a.created_at) AS ultima "
-                  + "FROM auditoria_logs a LEFT JOIN users x ON x.id = a.user_id WHERE a.created_at >= ? AND a.created_at < ? "
-                  + "GROUP BY x.email ORDER BY acciones DESC", desde, hasta);
-            List<Map<String, Object>> porAccion = Jdbc.query(c,
-                    "SELECT accion, count(*) AS cantidad FROM auditoria_logs WHERE created_at >= ? AND created_at < ? GROUP BY accion ORDER BY cantidad DESC LIMIT 15", desde, hasta);
+            List<Map<String, Object>> rows = repo.actividadPorUsuario(c, desde, hasta);
+            List<Map<String, Object>> porAccion = repo.accionesFrecuentes(c, desde, hasta);
             auditar(c, u, "REPAUD", p);
             if (rows.isEmpty()) return cab("Reporte de actividad", r) + "(sin actividad en el rango)";
             return cab("Reporte de actividad", r) + TextTable.render(rows, "usuario", "acciones", "primera", "ultima")
@@ -175,22 +148,19 @@ public class ReporteService {
         return Jdbc.tx(c -> {
             LocalDate hoy = LocalDate.now();
             StringBuilder sb = new StringBuilder("Resumen del dia " + hoy + ":\n");
-            Map<String, Object> pa = Jdbc.one(c, "SELECT pa.id, pa.estado, pa.version, count(b.id) AS bloques, "
-                    + "COALESCE(round(sum(EXTRACT(EPOCH FROM (b.hora_fin - b.hora_inicio))) / 3600.0, 2), 0) AS horas "
-                    + "FROM parrillas pa LEFT JOIN parrilla_bloques b ON b.parrilla_id = pa.id WHERE pa.fecha = ? GROUP BY pa.id", hoy);
+            Map<String, Object> pa = repo.parrillaDelDia(c, hoy);
             if (pa == null) {
                 sb.append("- Parrilla de hoy: NO CREADA (INSPAR[\"").append(hoy).append("\"])\n");
             } else {
                 sb.append("- Parrilla de hoy: ID ").append(pa.get("id")).append(", ").append(pa.get("estado")).append(", version ").append(pa.get("version"))
                   .append(", ").append(pa.get("bloques")).append(" bloques, ").append(pa.get("horas")).append(" h programadas\n");
-                long spots = Jdbc.count(c, "SELECT count(*) FROM pauta_spots s JOIN parrilla_bloques b ON b.id = s.parrilla_bloque_id WHERE b.parrilla_id = ?", pa.get("id"));
+                long spots = repo.contarSpotsDeParrilla(c, pa.get("id"));
                 sb.append("- Spots de hoy: ").append(spots).append("\n");
             }
-            sb.append("- Materiales pendientes de validacion: ").append(Jdbc.count(c, "SELECT count(*) FROM materiales WHERE activo AND estado = 'PENDIENTE'")).append("\n");
-            long alertas = Jdbc.count(c, "SELECT count(*) FROM parrilla_bloques b JOIN parrillas pa ON pa.id = b.parrilla_id JOIN materiales m ON m.id = b.material_id "
-                    + "WHERE pa.estado = 'PUBLICADA' AND pa.fecha >= ? AND m.estado = 'RECHAZADO'", hoy);
+            sb.append("- Materiales pendientes de validacion: ").append(repo.contarMaterialesPendientes(c)).append("\n");
+            long alertas = repo.contarAlertasMaterialRechazado(c, hoy);
             sb.append("- ALERTAS (material rechazado en parrillas publicadas): ").append(alertas).append("\n");
-            sb.append("- Parrillas publicadas desde hoy: ").append(Jdbc.count(c, "SELECT count(*) FROM parrillas WHERE estado = 'PUBLICADA' AND fecha >= ?", hoy));
+            sb.append("- Parrillas publicadas desde hoy: ").append(repo.contarParrillasPublicadasDesde(c, hoy));
             return sb.toString();
         });
     }

@@ -15,9 +15,18 @@ class SubjectParserTest {
     }
 
     @Test
+    void helpSinCorchetes() {
+        for (String s : new String[]{"help", "HELP", "  Help "}) {
+            assertTrue(SubjectParser.esValido(s));
+            assertEquals("HELP", SubjectParser.extraerComando(s));
+            assertTrue(SubjectParser.extraerParametros(s).isEmpty());
+        }
+    }
+
+    @Test
     void subjectInvalido() {
         assertFalse(SubjectParser.esValido("hola"));
-        assertFalse(SubjectParser.esValido("HELP"));
+        assertFalse(SubjectParser.esValido("HELP ME"));
         assertFalse(SubjectParser.esValido("[\"x\"]"));
         assertFalse(SubjectParser.esValido(null));
         assertEquals("", SubjectParser.extraerComando("hola que tal"));

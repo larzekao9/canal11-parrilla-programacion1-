@@ -1,7 +1,8 @@
-package canal11.gestion;
+package canal11.gestion.service;
 
 import canal11.db.Jdbc;
-import canal11.emision.AuditoriaService;
+import canal11.emision.service.AuditoriaService;
+import canal11.gestion.repository.ProgramaRepository;
 import canal11.mail.CommandRouter;
 import canal11.mail.CommandSpec;
 import canal11.model.Usuario;
@@ -24,6 +25,7 @@ public class ProgramaService {
     private static final String[] DET = {"id", "nombre", "descripcion", "tipo", "duracion_min", "genero", "clasificacion", "activo"};
 
     private final AuditoriaService auditoria;
+    private final ProgramaRepository repo = new ProgramaRepository();
 
     public ProgramaService(AuditoriaService auditoria) {
         this.auditoria = auditoria;
@@ -49,11 +51,10 @@ public class ProgramaService {
         String genero = opt(p.get(4), 60, "genero");
         String clasif = opt(p.get(5), 10, "clasificacion");
         return Jdbc.tx(c -> {
-            if (Jdbc.count(c, "SELECT 1 FROM programas WHERE lower(nombre) = lower(?) AND tipo = ?", nombre, tipo) > 0)
+            if (repo.existeNombreTipo(c, nombre, tipo, null))
                 throw new CommandException("Ya existe un programa '" + nombre + "' de tipo " + tipo + ".");
-            int id = Jdbc.insert(c, "INSERT INTO programas (nombre, descripcion, tipo, duracion_min, genero, clasificacion) "
-                    + "VALUES (?,?,?,?,?,?) RETURNING id", nombre, desc, tipo, dur, genero, clasif);
-            auditoria.registrar(c, actor.id(), "PROGRAMA_CREAR", "programas", id, null, Jdbc.json(c, "programas", id), Args.cmdText("INSPRG", p));
+            int id = repo.insert(c, nombre, desc, tipo, dur, genero, clasif);
+            auditoria.registrar(c, actor.id(), "PROGRAMA_CREAR", "programas", id, null, repo.snapshot(c, id), Args.cmdText("INSPRG", p));
             return "OK: programa creado con ID " + id;
         });
     }
@@ -62,8 +63,8 @@ public class ProgramaService {
         Args.exact(p, 1, "LISPRG[\"*\"] | LISPRG[\"tipo\"]");
         return Jdbc.tx(c -> {
             List<Map<String, Object>> rows = Args.isAll(p)
-                    ? Jdbc.query(c, "SELECT * FROM programas ORDER BY id")
-                    : Jdbc.query(c, "SELECT * FROM programas WHERE tipo = ? ORDER BY id", InputValidator.validateEnum(p.get(0), "tipo", TIPOS));
+                    ? repo.list(c)
+                    : repo.listByTipo(c, InputValidator.validateEnum(p.get(0), "tipo", TIPOS));
             return "Listando programas (" + rows.size() + "):\n" + TextTable.render(rows, COLS);
         });
     }
@@ -72,7 +73,7 @@ public class ProgramaService {
         Args.exact(p, 1, "GETPRG[id]");
         int id = InputValidator.validateId(p.get(0), "id");
         return Jdbc.tx(c -> {
-            Map<String, Object> r = Jdbc.one(c, "SELECT * FROM programas WHERE id = ?", id);
+            Map<String, Object> r = repo.findById(c, id);
             if (r == null) throw new CommandException("Programa no encontrado: " + id);
             return TextTable.detail(r, DET);
         });
@@ -84,9 +85,9 @@ public class ProgramaService {
         int id = InputValidator.validateId(p.get(0), "id");
         Map<String, String> f = Args.fields(p, 1, CAMPOS, usage);
         return Jdbc.tx(c -> {
-            Map<String, Object> cur = Jdbc.one(c, "SELECT * FROM programas WHERE id = ? FOR UPDATE", id);
+            Map<String, Object> cur = repo.findByIdForUpdate(c, id);
             if (cur == null) throw new CommandException("Programa no encontrado: " + id);
-            String antes = Jdbc.json(c, "programas", id);
+            String antes = repo.snapshot(c, id);
             List<String> sets = new ArrayList<>();
             List<Object> vals = new ArrayList<>();
             String nombre = (String) cur.get("nombre"), tipo = (String) cur.get("tipo");
@@ -110,11 +111,10 @@ public class ProgramaService {
                 sets.add(e.getKey() + " = ?");
                 vals.add(val);
             }
-            if (Jdbc.count(c, "SELECT 1 FROM programas WHERE lower(nombre) = lower(?) AND tipo = ? AND id <> ?", nombre, tipo, id) > 0)
+            if (repo.existeNombreTipo(c, nombre, tipo, id))
                 throw new CommandException("Ya existe un programa '" + nombre + "' de tipo " + tipo + ".");
-            vals.add(id);
-            Jdbc.exec(c, "UPDATE programas SET " + String.join(", ", sets) + " WHERE id = ?", vals.toArray());
-            auditoria.registrar(c, actor.id(), "PROGRAMA_ACTUALIZAR", "programas", id, antes, Jdbc.json(c, "programas", id), Args.cmdText("UPDPRG", p));
+            repo.update(c, id, sets, vals);
+            auditoria.registrar(c, actor.id(), "PROGRAMA_ACTUALIZAR", "programas", id, antes, repo.snapshot(c, id), Args.cmdText("UPDPRG", p));
             return "OK: programa " + id + " actualizado";
         });
     }
@@ -123,21 +123,20 @@ public class ProgramaService {
         Args.exact(p, 1, "DELPRG[id]");
         int id = InputValidator.validateId(p.get(0), "id");
         return Jdbc.tx(c -> {
-            Map<String, Object> cur = Jdbc.one(c, "SELECT * FROM programas WHERE id = ? FOR UPDATE", id);
+            Map<String, Object> cur = repo.findByIdForUpdate(c, id);
             if (cur == null) throw new CommandException("Programa no encontrado: " + id);
             if (!(Boolean) cur.get("activo")) return "OK: el programa " + id + " ya estaba desactivado";
             exigirSinUso(c, id);
-            String antes = Jdbc.json(c, "programas", id);
-            Jdbc.exec(c, "UPDATE programas SET activo = FALSE WHERE id = ?", id);
-            auditoria.registrar(c, actor.id(), "PROGRAMA_DESACTIVAR", "programas", id, antes, Jdbc.json(c, "programas", id), Args.cmdText("DELPRG", p));
+            String antes = repo.snapshot(c, id);
+            repo.desactivar(c, id);
+            auditoria.registrar(c, actor.id(), "PROGRAMA_DESACTIVAR", "programas", id, antes, repo.snapshot(c, id), Args.cmdText("DELPRG", p));
             return "OK: programa " + id + " desactivado";
         });
     }
 
     /** No se desactiva un programa usado en parrillas borrador/publicadas de hoy en adelante. */
-    private static void exigirSinUso(java.sql.Connection c, int id) throws java.sql.SQLException {
-        long n = Jdbc.count(c, "SELECT count(*) FROM parrilla_bloques b JOIN parrillas pa ON pa.id = b.parrilla_id "
-                + "WHERE b.programa_id = ? AND pa.estado IN ('BORRADOR','PUBLICADA') AND pa.fecha >= CURRENT_DATE", id);
+    private void exigirSinUso(java.sql.Connection c, int id) throws java.sql.SQLException {
+        long n = repo.bloquesVigentes(c, id);
         if (n > 0) throw new CommandException("El programa esta en " + n + " bloque(s) de parrillas vigentes; quitelo de las parrillas primero.");
     }
 

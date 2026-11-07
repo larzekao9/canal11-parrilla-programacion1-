@@ -9,6 +9,26 @@ Java 17 + Maven + PostgreSQL. Tecnología Web (INF513) – Grupo #12.
 
 Orden de lectura: `procesos/guia-actualizacion-y-handoff.md` → `procesos/plan-por-fases.md`.
 
+## Estructura del codigo
+
+Paquetes por modulo, cada uno con `service/` (valida parametros, reglas de negocio, transaccion y auditoria) y `repository/` (solo SQL JDBC):
+
+```
+canal11/
+  App, Doctor
+  db/            conexion, esquema, semilla, utilidades JDBC
+  mail/          daemon, POP3/SMTP, SubjectParser, CommandRouter (AUTH, HELP, permisos por rol), simulador
+  model/         Usuario
+  gestion/       service + repository: usuarios (CU1), programas (CU2), materiales (CU4), validacion (CU5)
+  programacion/  service + repository: parrillas y bloques (CU3)
+  comercial/     service + repository: clientes y pautas/spots (CU6)
+  emision/       service + repository: emisiones, conciliacion y auditoria (CU7)
+  reporte/       service + repository: reportes (CU8)
+  util/          validaciones, tablas de texto, argumentos
+```
+
+Cada service registra sus comandos en el router (`registerAll`); `HELP[]` (o `help` en el asunto) se arma solo a partir de ese registro.
+
 ## Probar el sistema
 
 1. Copiar `config.properties.example` a `config.properties` y completar BD (`db.*`), admin semilla (`admin.*`) y correo (`mail.*`). Ese archivo NO se sube a git.
